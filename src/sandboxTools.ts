@@ -4,8 +4,6 @@ import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { createReadStream } from 'node:fs';
-import { MongoClient, GridFSBucket } from 'mongodb';
 import { z } from 'zod';
 import {
   formatOptimizedResponse, formatError, getToolAnnotations,

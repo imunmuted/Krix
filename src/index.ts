@@ -1,6 +1,7 @@
 import express, { Request, Response } from 'express';
 import crypto from 'node:crypto';
 import path from 'node:path';
+import fs from 'node:fs';
 import { z } from 'zod';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -32,10 +33,24 @@ function tagCategory(registry: Record<string, any>, categoryOf: Record<string, T
   }
 }
 
-function createMasterServer(githubToken: string, renderToken: string | undefined, sessionId: string) {
+function baseUrl(req: Request): string {
+  const proto = (req.headers['x-forwarded-proto'] as string)?.split(',')[0].trim() || req.protocol || 'https';
+  const host = req.get('host') || 'localhost:3000';
+  return `${proto}://${host}`;
+}
+
+function serverIcons(req: Request): Array<{ src: string; mimeType: string; sizes: string[] }> {
+  const base = process.env.PUBLIC_BASE_URL?.replace(/\/$/, '') || baseUrl(req);
+  const logo = process.env.APP_LOGO_URL?.trim() || `${base}/logo.png`;
+  const mimeType = /\.svg(?:\?.*)?$/i.test(logo) ? 'image/svg+xml' : /\.jpe?g(?:\?.*)?$/i.test(logo) ? 'image/jpeg' : 'image/png';
+  return [{ src: logo, mimeType, sizes: ['320x317'] }];
+}
+
+function createMasterServer(githubToken: string, renderToken: string | undefined, sessionId: string, req: Request) {
   const server = new McpServer({
     name: 'krix',
-    version: '1.0.0'
+    version: '2.1.0',
+    icons: serverIcons(req)
   }, {
     capabilities: {
       tools: {
@@ -74,7 +89,15 @@ function createMasterServer(githubToken: string, renderToken: string | undefined
 const app = express();
 app.use(express.json({ limit: '50mb' }));
 app.use('/assets', express.static('assets'));
-app.get('/logo.jpg', (_req, res) => res.sendFile(path.resolve('assets/logo.jpg')));
+app.get(['/logo.png', '/logo.jpg', '/favicon.ico'], (_req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+  const pngPath = path.resolve('assets/logo.png');
+  const jpgPath = path.resolve('assets/logo.jpg');
+  if (fs.existsSync(pngPath)) return res.sendFile(pngPath);
+  if (fs.existsSync(jpgPath)) return res.sendFile(jpgPath);
+  res.status(404).send('Logo not found');
+});
 
 app.all('/mcp', async (req: Request, res: Response): Promise<void> => {
   if (!MCP_API_KEY) {
@@ -134,7 +157,7 @@ app.all('/mcp', async (req: Request, res: Response): Promise<void> => {
     }
   };
 
-  const masterServer = createMasterServer(githubToken, renderToken, newSessionId);
+  const masterServer = createMasterServer(githubToken, renderToken, newSessionId, req);
   try {
     await masterServer.connect(transport);
     await transport.handleRequest(req, res, req.body);

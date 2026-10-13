@@ -126,7 +126,7 @@ export function registerGitHubTools(server: McpServer, octokit: Octokit, session
       repo: z.string().optional(),
       branch: z.string().optional(),
       cwd: z.string().optional().describe('Default working directory for sandbox_exec/sandbox_run/sandbox_install/sandbox_file when no explicit dir is given.'),
-      env: z.record(z.string()).optional().describe('Default environment variables merged into every sandbox command.')
+      env: z.record(z.string(), z.string()).optional().describe('Default environment variables merged into every sandbox command.')
     },
     annotations: getToolAnnotations('set_active_context')
   }, async (args: any) => {

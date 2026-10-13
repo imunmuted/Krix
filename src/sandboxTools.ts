@@ -9,7 +9,7 @@ import { MongoClient, GridFSBucket } from 'mongodb';
 import { z } from 'zod';
 import {
   formatOptimizedResponse, formatError, getToolAnnotations,
-  sanitizeCommand, sanitizePath, getSessionContext, updateSessionContext, deleteSessionContext, makeRegistrar, getAuthKeyForSession
+  sanitizeCommand, sanitizeNetworkInCommand, sanitizePath, getSessionContext, updateSessionContext, deleteSessionContext, makeRegistrar, getAuthKeyForSession
 } from './security.js';
 
 interface ActiveProcess {

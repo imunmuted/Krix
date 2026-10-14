@@ -89,35 +89,22 @@ export function getServerIcons(baseUrl: string = DEFAULT_PUBLIC_URL): McpIcon[] 
     }
   ];
 
-  if (base && !base.includes("raw.githubusercontent.com") && !base.includes("krix.onrender.com") && !base.includes("krix-gateway.onrender.com")) {
-    icons.push(
-      {
-        src: `${base}/icon-48.png`,
-        url: `${base}/icon-48.png`,
-        mimeType: "image/png",
-        sizes: ["48x48"],
-        theme: "light"
-      },
-      {
-        src: `${base}/icon-48.png`,
-        url: `${base}/icon-48.png`,
-        mimeType: "image/png",
-        sizes: ["48x48"],
-        theme: "dark"
-      },
-      {
-        src: `${base}/icon-128.png`,
-        url: `${base}/icon-128.png`,
-        mimeType: "image/png",
-        sizes: ["128x128"]
-      },
-      {
-        src: `${base}/logo.png`,
-        url: `${base}/logo.png`,
-        mimeType: "image/png",
-        sizes: ["320x320"]
-      }
-    );
+  // Clients (e.g. Gemini) only trust icons hosted on the server's own origin, so when the server is
+  // reached through its own host, advertise those first and keep the GitHub copies as fallbacks.
+  if (base && !base.includes("raw.githubusercontent.com") && !base.includes("krix-gateway.onrender.com")) {
+    const own: McpIcon[] = [
+      { src: `${base}/icon-48.png`, url: `${base}/icon-48.png`, mimeType: "image/png", sizes: ["48x48"], theme: "light" },
+      { src: `${base}/icon-48.png`, url: `${base}/icon-48.png`, mimeType: "image/png", sizes: ["48x48"], theme: "dark" },
+      { src: `${base}/icon-128.png`, url: `${base}/icon-128.png`, mimeType: "image/png", sizes: ["128x128"] },
+      { src: `${base}/logo.png`, url: `${base}/logo.png`, mimeType: "image/png", sizes: ["320x320"] }
+    ];
+    const seen = new Set<string>();
+    return [...own, ...icons].filter((i) => {
+      const key = `${i.src}|${i.theme ?? ""}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
   }
 
   return icons;

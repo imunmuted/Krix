@@ -109,10 +109,12 @@ function createMasterServer(githubToken: string, renderToken: string | undefined
     }
   });
 
-  (server.server as any)._serverInfo.icon = GITHUB_ICON_48_URL;
-  (server.server as any)._serverInfo.iconUrl = GITHUB_ICON_48_URL;
-  (server.server as any)._serverInfo.logo = GITHUB_LOGO_URL;
-  (server.server as any)._serverInfo.logoUrl = GITHUB_LOGO_URL;
+  const primaryIconUrl = serverIcons[0]?.src ?? GITHUB_ICON_48_URL;
+  const primaryLogoUrl = serverIcons.find((i) => i.sizes?.includes('320x320'))?.src ?? GITHUB_LOGO_URL;
+  (server.server as any)._serverInfo.icon = primaryIconUrl;
+  (server.server as any)._serverInfo.iconUrl = primaryIconUrl;
+  (server.server as any)._serverInfo.logo = primaryLogoUrl;
+  (server.server as any)._serverInfo.logoUrl = primaryLogoUrl;
   (server.server as any)._serverInfo.icons = serverIcons;
 
   const octokit = new Octokit({ auth: githubToken || '' });
@@ -434,10 +436,10 @@ app.get('/gemini-extension.json', (req, res) => {
     title: 'Krix',
     version: '1.1.0',
     description: 'Advanced agentic gateway for remote GitHub discovery, Render management, and sandboxed execution.',
-    icon: GITHUB_ICON_48_URL,
-    iconUrl: GITHUB_ICON_48_URL,
-    logo: GITHUB_LOGO_URL,
-    logoUrl: GITHUB_LOGO_URL,
+    icon: getServerIcons(base)[0]?.src ?? GITHUB_ICON_48_URL,
+    iconUrl: getServerIcons(base)[0]?.src ?? GITHUB_ICON_48_URL,
+    logo: getServerIcons(base).find((i) => i.sizes?.includes('320x320'))?.src ?? GITHUB_LOGO_URL,
+    logoUrl: getServerIcons(base).find((i) => i.sizes?.includes('320x320'))?.src ?? GITHUB_LOGO_URL,
     icons: getServerIcons(base),
     mcpServers: {
       krix: {

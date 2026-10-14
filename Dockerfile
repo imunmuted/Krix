@@ -1,11 +1,12 @@
 FROM node:22-slim
 
-# Runtimes + file-tooling used by the sandbox (zip/unzip/7z, ImageMagick and Pillow for image conversion).
+# Runtimes + file-tooling used by the sandbox (zip/unzip/7z, ImageMagick, ffmpeg, Pillow, and data/math packages).
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     python3 \
     python3-pip \
     python3-pil \
+    ffmpeg \
     golang-go \
     default-jdk-headless \
     g++ \
@@ -21,6 +22,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     imagemagick \
     tini \
     && rm -rf /var/lib/apt/lists/*
+
+RUN pip3 install --no-cache-dir --break-system-packages \
+    numpy \
+    sympy \
+    matplotlib \
+    beautifulsoup4
 
 # Unprivileged user that ALL sandboxed code, git commands and sandbox file operations run as.
 # The server itself stays root only so it can switch to this user for each child process; the

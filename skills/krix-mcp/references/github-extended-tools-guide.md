@@ -5,8 +5,8 @@ This reference guide provides exhaustive documentation for the **32 Extended Git
 ---
 
 ## Tool Categories & Activation
-- **Issues & PRs (`github_issues_prs`)**: Enable via `load_toolset({ category: "github_issues_prs" })` or environment variable `ENABLE_GITHUB_ISSUES_PRS=true`.
-- **Extended & Admin (`github_admin`)**: Enable via `load_toolset({ category: "github_admin" })` or environment variable `ENABLE_GITHUB_ADMIN=true`.
+- **Issues & PRs (`github_issues_prs`)**: Enable via environment variable `ENABLE_GITHUB_ISSUES_PRS=true`.
+- **Extended & Admin (`github_admin`)**: Enable via environment variable `ENABLE_GITHUB_ADMIN=true`.
 
 ---
 

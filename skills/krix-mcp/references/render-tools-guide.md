@@ -6,7 +6,7 @@ This reference guide provides exhaustive documentation for the **21 Render Tools
 
 ## Tool Category & Activation
 - **Category**: `render`
-- **Activation**: Enable via lazy loading (`load_toolset({ category: "render" })`) or environment variable (`ENABLE_RENDER=true` or `ENABLE_RENDER_TOOLS=true`).
+- **Activation**: Enable via environment variable (`ENABLE_RENDER=true` or `ENABLE_RENDER_TOOLS=true`).
 
 ---
 

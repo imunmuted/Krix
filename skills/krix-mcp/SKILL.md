@@ -1,108 +1,117 @@
 ---
 name: krix-mcp
-description: Essential Model Context Protocol (MCP) gateway skill for agentic coding, GitHub repository management, code navigation, surgical file editing, and sandbox execution. MUST be activated whenever the user asks to "edit that file", "fix this file", "give a review", review PRs/code, refactor, write, debug, test, build, or perform any task related to coding, GitHub, or software development.
-allowed-tools: custom_mcp__3ea97b90e553014c0006587aaab26be708e180ca262e5eb5
+description: Unified Model Context Protocol (MCP) gateway skill for agentic coding, repository navigation, AST structural inspection, surgical code editing, isolated sandbox execution, cloud infrastructure management on Render, and GitHub MCP integrations. Activate whenever performing coding, software engineering, repository operations, debugging, reviewing PRs, executing commands in sandbox, managing Render cloud services, or sharing artifacts.
 ---
 
 # Krix MCP Skill
 
-A comprehensive workflow guide for agentic coding, repository navigation, high-performance code editing, and isolated sandbox execution using the Krix MCP toolset.
+A comprehensive workflow guide for agentic coding, repository navigation, high-performance surgical code editing, isolated containerized execution, cloud infrastructure automation on Render, and GitHub MCP integrations using the Krix MCP server.
 
-## Summary
+---
 
-Krix MCP is a unified, high-efficiency Model Context Protocol gateway built specifically for agentic coding. It combines remote GitHub repository management, precise AST symbol outline extraction, high-performance search and surgical editing, and an isolated local sandbox execution environment.
+## Summary & Core Purpose
 
-## Activation Triggers & Scenarios
+Krix MCP is a unified, high-efficiency Model Context Protocol gateway built specifically for autonomous agentic software engineering. It combines:
+1. **Core Agentic GitHub Operations**: Repository tree indexing, AST symbol outline extraction, high-performance regex search, surgical string replacement with similarity hints, line-range patching, and atomic multi-file commits.
+2. **Render Cloud Infrastructure**: Complete automation of web services, static sites, scheduled cron jobs, deployments, application logs, metrics, and PostgreSQL databases.
+3. **Execution Sandbox, Local Git & Sandbox Store**: An isolated multi-tenant execution environment featuring persistent bash shells, 11 language runtimes, package installation, background process tracking, local Git CLI operations, and **Sandbox Store** for 48-hour cloud file sharing and web downloads.
+4. **GitHub MCP Integration**: Standard GitHub MCP tools for managing Issues, Pull Requests, reviews, comments, branches, tags, releases, teams, secret scanning, and Copilot assignments.
+
+---
+
+## Mandatory Activation Triggers
 
 MANDATORY DIRECTIVE: Activate and follow this skill automatically whenever the user mentions terms or requests actions including:
 
-- **Direct File Manipulation Phrases**: "edit that file", "edit this file", "fix this file", "patch this code", "update the file", "refactor this file/function".
-- **Code Review & Inspection**: "give a review", "review this PR", "review my code", "check for bugs", "audit repository".
-- **General Coding & Software Engineering**: Writing code, debugging runtime errors, building features, running scripts, executing test suites, installing dependencies.
-- **GitHub & Repository Management**: Managing branches, creating pull requests, pushing commits, searching codebases, inspecting git diffs, cloning repositories.
+- **Direct File Manipulation & Refactoring**: "edit that file", "fix this file", "patch this code", "update the file", "refactor this function/class".
+- **Code Review & Audits**: "give a review", "review this PR", "review my code", "check for bugs", "audit repository".
+- **General Software Engineering**: Writing code, debugging runtime errors, running test suites, executing build commands, installing dependencies.
+- **GitHub & Repository Management**: Managing branches, creating PRs, merging PRs, managing issues, inspecting git diffs, cloning repositories, inspecting git commit history.
+- **Cloud Infrastructure & Deployments**: Deploying to Render, managing web services/static sites, restarting services, inspecting deployment logs, querying Render PostgreSQL.
+- **File Sharing & Artifact Downloads**: Sharing sandbox output files with the user, downloading assets from URLs into the sandbox workspace.
 
 ---
 
-## Mandatory Coding Directive
+## ⚠️ Important Distinction: `sandbox_file` vs `sandbox_store`
 
-MANDATORY DIRECTIVE: You MUST ALWAYS activate and follow this skill whenever performing any coding, software engineering, debugging, refactoring, building, testing, or repository task. You will ALWAYS use the Krix MCP toolset for all coding requests, including:
+To prevent any confusion between similarly named tools:
 
-- Writing, refactoring, debugging, or reviewing code in any language (TypeScript, JavaScript, Python, Go, Java, C++, C, Rust, Shell, Ruby, PHP).
-- Navigating, inspecting, or searching codebases (`grep`, `git_tree`, `view_file_outline`, `search_code`).
-- Editing files surgically (`str_replace_editor`, `patch_contents`) or updating files remotely/locally (`create_or_update_file`, `push_files`, `sandbox_file`).
-- Executing code, running test suites, installing dependencies, and managing background tasks (`sandbox_run`, `sandbox_exec`, `sandbox_install`, `sandbox_ps`, `sandbox_output`).
-- Managing GitHub repositories, branches, commits, and Pull Requests (`set_active_context`, `git_clone`, `git_commit_push`, `create_pull_request`).
+- **`sandbox_file`** (**Local Filesystem Operations**): Performs safe, binary-proof file operations (`read`, `write`, `append`, `edit`, `delete`) on files inside the local sandbox container. Use this to read or modify source files in the sandbox workspace without risking shell escaping or quoting bugs.
+- **`sandbox_store`** (**Cloud File Sharing & Web Downloads**): Moves files between the sandbox, the web, and the user via actions `share`, `list`, `delete`, and `download`. Use `share` to upload files to MongoDB GridFS and get a private 48-hour expiring download URL to hand to the user, and `download` to fetch external files from HTTP/HTTPS URLs into the sandbox.
 
 ---
 
-## Tool Categories Overview (31 Tools Total)
+## Tool Categories Overview (87 Tools Total)
 
-The Krix MCP toolset consists of 31 specialized tools split across 2 main operational paradigms: **Agentic Remote GitHub Tools** (17 tools) and **Sandbox Execution & Local Sync Tools** (14 tools).
+The Krix MCP server provides 87 specialized tools categorized across 4 operational domains:
 
-### A. Agentic Remote GitHub Tools (17 Tools)
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                               Krix MCP                                 │
+└───────┬─────────────────┬────────────────────┬──────────────────┬──────┘
+        │                 │                    │                  │
+        ▼                 ▼                    ▼                  ▼
+┌───────────────┐ ┌───────────────┐  ┌───────────────────┐  ┌────────────────┐
+│  Core GitHub  │ │  Render Cloud │  │ Execution Sandbox │  │   GitHub MCP   │
+│  (17 Tools)   │ │  (21 Tools)   │  │    & Store (15)   │  │ Extended (34)  │
+└───────────────┘ └───────────────┘  └───────────────────┘  └────────────────┘
+```
 
-1. **Repository & Context Management**:
-   - `set_active_context`: Sets default GitHub repository owner, repo, branch, sandbox working directory, and environment variables.
-   - `get_me`: Retrieves authenticated GitHub user profile metadata.
-   - `search_repositories`: Searches or lists GitHub repositories with pagination, regex filters, and similarity rankings.
-   - `list_branches`: Lists remote branches in the target repository.
-   - `create_branch`: Creates a new remote branch pointing to a commit SHA or ref.
-   - `delete_branch`: Deletes a remote branch.
+### 1. Core Agentic GitHub Tools (17 Tools)
+Operate directly against remote GitHub repositories for high-performance discovery, AST extraction, surgical editing, and atomic commits:
+- **Context & Identity**: `set_active_context`, `get_me`
+- **Discovery & Navigation**: `search_repositories`, `list_branches`, `create_branch`, `delete_branch`, `git_tree`, `view_file_outline`, `grep`, `search_code`, `get_file_contents`
+- **Surgical Editing & PRs**: `str_replace_editor`, `patch_contents`, `create_or_update_file`, `delete_file`, `push_files`, `create_pull_request`
 
-2. **Code Inspection & Search**:
-   - `git_tree`: Recursively lists directory contents and path indices for a repository commit/tree.
-   - `view_file_outline`: Extracts high-level AST symbol structures (classes, functions, interfaces, methods) from source files.
-   - `grep`: High-performance pattern search with line windowing, context lines, and glob/extension filters.
-   - `search_code`: Performs code searches across repositories using GitHub search syntax.
-   - `get_file_contents`: Fetches file contents or specific 1-indexed line windows (up to 500 lines).
+### 2. Render Cloud Infrastructure Tools (21 Tools)
+Manage full cloud lifecycle on Render:
+- **Workspaces**: `list_workspaces`, `select_workspace`, `get_selected_workspace`
+- **Services & Deploys**: `list_services`, `get_service`, `create_web_service`, `create_static_site`, `create_cron_job`, `restart_service`, `delete_service`, `list_deploys`, `get_deploy`, `trigger_deploy`, `cancel_deploy`
+- **Observability & Databases**: `list_logs`, `list_log_label_values`, `get_metrics`, `list_env_vars`, `update_env_vars`, `delete_env_var`, `query_render_postgres`
 
-3. **Surgical Code Editing & Pull Requests**:
-   - `str_replace_editor`: Performs exact string block search and replacement in a file and commits changes.
-   - `patch_contents`: Replaces a specific 1-indexed line range with new content and commits changes.
-   - `create_or_update_file`: Creates a new file or completely replaces file content with commit SHA verification.
-   - `delete_file`: Deletes a file from the remote repository.
-   - `push_files`: Batch pushes multiple file modifications in a single atomic commit.
-   - `create_pull_request`: Opens a new Pull Request on GitHub.
+### 3. Execution Sandbox, Local Git & Sandbox Store (15 Tools)
+Containerized execution environment with persistent shells, 11 runtimes, local Git CLI, and artifact sharing:
+- **Execution & Process Management**: `sandbox_status`, `sandbox_run`, `sandbox_exec`, `sandbox_install`, `sandbox_ps`, `sandbox_output`, `sandbox_file`, `sandbox_reset`
+- **Sandbox Store (Sharing & Downloads)**: `sandbox_store` (`share`, `list`, `delete`, `download`)
+- **Local Git Synchronization**: `git_clone`, `git_checkout`, `git_pull`, `git_status`, `git_diff`, `git_commit_push`
 
-### B. Sandbox Environment & Local Synchronization Tools (14 Tools)
-
-1. **Local Sandbox Execution & Process Management**:
-   - `sandbox_status`: Inspects sandbox container runtimes, memory, disk usage, active cloned repo, and shell state.
-   - `sandbox_run`: Directly executes code snippets or script files across 11 language runtimes (`py`, `js`, `ts`, `sh`, `go`, `java`, `cpp`, `c`, `rust`, `ruby`, `php`).
-   - `sandbox_exec`: Runs arbitrary bash commands in a persistent or isolated shell, with support for background execution, working directories, and timeouts.
-   - `sandbox_install`: Installs `npm` or `pip` packages locally into the sandbox workspace.
-   - `sandbox_ps`: Lists, monitors, inspects stdout/stderr, or terminates background sandbox processes.
-   - `sandbox_output`: Pages through truncated output logs from `sandbox_exec`, `sandbox_run`, or `sandbox_install`.
-   - `sandbox_file`: Safe, binary-proof file operations (`read`, `write`, `append`, `edit`, `delete`) on the local sandbox filesystem.
-   - `sandbox_reset`: Resets sandbox state by wiping scratch files, cloned repos, persistent shell, and background processes.
-
-2. **Local Git Synchronization**:
-   - `git_clone`: Clones the active GitHub repository into the local sandbox environment.
-   - `git_checkout`: Switches or creates branches in the locally cloned sandbox repository.
-   - `git_pull`: Fast-forward pulls the latest commits from origin into the local branch.
-   - `git_status`: Displays compact local working tree status (branch, modified, staged, untracked files).
-   - `git_diff`: Displays git diff for modified or staged files in the cloned sandbox repo.
-   - `git_commit_push`: Stages changes, creates a commit, and pushes to origin from the sandbox.
+### 4. Extended GitHub MCP Tools (34 Tools)
+Conform to standard GitHub MCP conventions for issue management, PR reviews, releases, and Copilot workflows:
+- **Issues**: `list_issues`, `issue_read`, `issue_write`, `sub_issue_write`, `add_issue_comment`, `search_issues`
+- **Pull Requests & Reviews**: `list_pull_requests`, `pull_request_read`, `update_pull_request`, `update_pull_request_branch`, `merge_pull_request`, `pull_request_review_write`, `add_comment_to_pending_review`, `add_reply_to_pull_request_comment`, `search_pull_requests`
+- **Git Metadata & Releases**: `get_commit`, `search_commits`, `list_commits`, `get_label`, `list_issue_fields`, `list_issue_types`, `get_release`, `list_releases`, `get_tag`, `list_tags`
+- **Teams, Security & Copilot**: `get_teams`, `get_team_members`, `list_repository_collaborators`, `search_users`, `create_repository`, `fork_repository`, `run_secret_scanning`, `request_copilot_review`, `assign_copilot_to_issue`
 
 ---
 
-## Detailed Reference Documentation
+## 📚 Detailed Reference Guides (3 References + 1 Additional GitHub MCP Reference)
 
-Comprehensive, super-detailed documentation and parameter schemas for all tools and operational workflows are available in the bundled reference files:
+Exhaustive documentation, full input/output schemas, and usage examples are organized into 4 dedicated reference guides:
 
-- `skills/krix-mcp/references/agentic-tools-guide.md`: Exhaustive guide for all 17 Agentic Remote GitHub tools, schemas, usage examples, and parameters.
-- `skills/krix-mcp/references/sandbox-tools-guide.md`: Exhaustive guide for all 14 Sandbox Environment & Local Sync tools, runtimes, background process management, and offline constraints.
-- `skills/krix-mcp/references/workflows-and-best-practices.md`: End-to-end multi-tool workflows for codebase discovery, surgical editing, feature development, sandbox testing, and Pull Request submission.
-- `skills/krix-mcp/references/render-tools-guide.md`: Exhaustive guide for all 21 Render cloud management tools.
-- `skills/krix-mcp/references/github-extended-tools-guide.md`: Exhaustive guide for all 32 Extended GitHub tools (Issues, PRs, Reviews, Teams, Admin).
-- `skills/krix-mcp/references/file-sharing-guide.md`: How to use `sandbox_files` — download URLs into the sandbox, then share results with the user via a private MongoDB-backed link (auto-deleted after 48h), list and delete.
+1. **Core GitHub Tools Reference**:
+   - File: [`skills/krix-mcp/references/github-tools-guide.md`](references/github-tools-guide.md)
+   - Scope: Complete parameter schemas and examples for all 17 Core Agentic GitHub tools (AST outline, grep, surgical replacement, line patching, atomic commits).
+
+2. **Render Cloud Infrastructure Reference**:
+   - File: [`skills/krix-mcp/references/render-tools-guide.md`](references/render-tools-guide.md)
+   - Scope: Complete parameter schemas and examples for all 21 Render cloud management tools (workspaces, services, deploys, logs, metrics, postgres).
+
+3. **Sandbox Tools & Sandbox Store Reference**:
+   - File: [`skills/krix-mcp/references/sandbox-tools-guide.md`](references/sandbox-tools-guide.md)
+   - Scope: Complete parameter schemas and examples for all 15 Sandbox tools, persistent bash shell behavior, 11 runtimes, `sandbox_file` vs `sandbox_store`, outbound network capabilities, and local Git CLI tools.
+
+4. **Additional GitHub MCP Tools Reference**:
+   - File: [`skills/krix-mcp/references/github-mcp-tools-guide.md`](references/github-mcp-tools-guide.md)
+   - Scope: Complete parameter schemas and examples for all 34 Extended GitHub MCP tools (Issues, PRs, line-level code reviews, branches, releases, tags, collaborators, secret scanning, and Copilot).
 
 ---
 
-## Core Rules & Execution Directives
+## Core Execution Directives & Best Practices
 
-1. **Context Anchor**: Run `set_active_context` at the start of every coding session to bind repository and branch context.
-2. **Surgical Precision**: Always prefer `str_replace_editor` or `patch_contents` over full file overwrites to prevent accidental code truncation.
-3. **Atomic Multi-File Commits**: Use `push_files` when updating multiple files simultaneously to maintain repository buildability.
-4. **Token-Efficient Line Windowing**: Always specify `startLine` and `endLine` when fetching code with `get_file_contents`.
-5. **Offline Sandbox Compliance**: The local sandbox has no outbound internet connectivity; package installations rely on pre-cached registries.
+1. **Context Anchor**: Execute `set_active_context` at the start of every session to establish default `owner`, `repo`, `branch`, and sandbox working directory.
+2. **Surgical Precision**: Always prefer `str_replace_editor` or `patch_contents` over whole-file overwrites (`create_or_update_file`) to eliminate accidental code truncation.
+3. **Atomic Multi-File Commits**: Use `push_files` when updating multiple dependent files simultaneously so the repository remains in a buildable state on every commit.
+4. **Token-Efficient Line Windowing**: Always provide `startLine` and `endLine` when calling `get_file_contents` to inspect only the relevant code section.
+5. **Accurate Network Understanding**: The sandbox **has outbound internet connectivity**. It can install packages from official registries (`npm`, `pip`), fetch remote assets with `sandbox_store` (`action: "download"`), and clone remote repositories. Outbound requests are protected by server-side security checks that block private/internal IP access.
+6. **Use GitHub MCP**: For all standard GitHub issue triage, PR review discussions, line-level review comments, release queries, and repository administration, use the GitHub MCP tools documented in [`github-mcp-tools-guide.md`](references/github-mcp-tools-guide.md).
+7. **Artifact Delivery**: When generating code, reports, images, or zip archives inside the sandbox that the user needs, use `sandbox_store` (`action: "share"`, `sandboxPath: "..."`) and **always provide the resulting download URL directly to the user in your response**.

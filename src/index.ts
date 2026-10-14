@@ -292,7 +292,7 @@ const server = app.listen(PORT, () => {
   console.log(`🚀 Krix Active on Port ${PORT}`);
   logIsolationStatus();
   if (process.env.MONGODB_URI) startFileSweeper();
-  else console.warn('ℹ️  MONGODB_URI is not set: sandbox_files share/list/delete will report that file storage is not configured (download still works).');
+  else console.warn('ℹ️  MONGODB_URI is not set: sandbox_store share/list/delete will report that file storage is not configured (download still works).');
 });
 server.requestTimeout = 120_000;
 server.headersTimeout = 30_000;

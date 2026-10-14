@@ -9,7 +9,7 @@ Engineered for **LLM token conservation**, **multi-tenant identity isolation**, 
 ## 🚀 Key Features & Innovations
 
 ### 1. Token-Efficient Toolset Categories
-To conserve token budget, Krix starts with a lightweight default suite (**Core + Sandbox + File Sharing**). Larger categories are switched on per deployment with environment flags (there is no runtime `load_toolset` tool):
+To conserve token budget, Krix starts with a lightweight default suite (**Core + Sandbox + Sandbox Store**). Larger categories are switched on per deployment with environment flags (there is no runtime `load_toolset` tool):
 
 ```bash
 ENABLE_GITHUB_ISSUES_PRS=true   # Issues, PRs, Reviews, Comments
@@ -26,7 +26,7 @@ ENABLE_FILE_SHARING=false       # Turn the file-sharing tools off
 - **Safe Environment**: Automatically pins `HOME` to `/tmp/krix_home/` with pre-created cache directories, preventing `npm` and `pip` `ENOENT` failures in containerized environments.
 - **Context-Aware Reset (`sandbox_reset`)**: Wipes scratch files, persistent shells, and background processes while safely preserving active Git context (`owner`, `repo`, `branch`).
 
-### 2a. Files: `sandbox_files` (share / list / delete / download)
+### 2a. Sandbox Store: `sandbox_store` (share / list / delete / download)
 One tool moves files between the sandbox, the internet and you:
 
 - `download` — fetch a file from an http(s) URL into the sandbox (private/internal addresses are refused, redirects are re-checked, DNS is pinned, size-capped by `DOWNLOAD_MAX_MB`). Plain `curl`/`wget` also work in the shell.
@@ -103,10 +103,10 @@ Every shared file is **auto-deleted after 48 hours** (`FILE_TTL_HOURS`, 1–48).
 
 ---
 
-### Files (`files` — Enabled by Default, sharing needs `MONGODB_URI`)
+### Sandbox Store (`files` — Enabled by Default, sharing needs `MONGODB_URI`)
 | Tool Name | Type | Description |
 | :--- | :--- | :--- |
-| `sandbox_files` | `MUTATING` | `action: share \| list \| delete \| download` — share sandbox files via a private 48h link (MongoDB), list/delete your shared files, or download a URL into the sandbox. |
+| `sandbox_store` | `MUTATING` | `action: share \| list \| delete \| download` — share sandbox files via a private 48h link (MongoDB), list/delete your shared files, or download a URL into the sandbox. |
 
 ---
 
@@ -299,11 +299,10 @@ Connect MCP clients (Antigravity, Claude Desktop, Cursor, or Custom SDKs) via St
 
 The repository includes a complete agentic workflow skill in [`skills/krix-mcp/SKILL.md`](skills/krix-mcp/SKILL.md) and detailed reference documentation under [`skills/krix-mcp/references/`](skills/krix-mcp/references/):
 
-- [`agentic-tools-guide.md`](skills/krix-mcp/references/agentic-tools-guide.md): 17 Agentic Remote GitHub tools
-- [`sandbox-tools-guide.md`](skills/krix-mcp/references/sandbox-tools-guide.md): 14 Sandbox execution and local Git CLI tools
-- [`workflows-and-best-practices.md`](skills/krix-mcp/references/workflows-and-best-practices.md): Multi-tool workflow patterns and safety directives
+- [`github-tools-guide.md`](skills/krix-mcp/references/github-tools-guide.md): 17 Agentic Remote GitHub tools
 - [`render-tools-guide.md`](skills/krix-mcp/references/render-tools-guide.md): 21 Render cloud infrastructure tools
-- [`github-extended-tools-guide.md`](skills/krix-mcp/references/github-extended-tools-guide.md): 32 Extended GitHub tools (Issues, PRs, Reviews, Teams, Admin)
+- [`sandbox-tools-guide.md`](skills/krix-mcp/references/sandbox-tools-guide.md): 15 Sandbox execution, local Git CLI tools, and Sandbox Store (`sandbox_store`)
+- [`github-mcp-tools-guide.md`](skills/krix-mcp/references/github-mcp-tools-guide.md): 32 Extended GitHub MCP tools (Issues, PRs, Reviews, Teams, Admin, Copilot)
 
 AI agents can import this skill to automatically direct and coordinate agentic coding, GitHub operations, surgical edits, sandbox execution, and Render cloud management using Krix MCP tools.
 

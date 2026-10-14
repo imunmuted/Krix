@@ -167,7 +167,7 @@ export const TOOL_PERMISSIONS: Record<string, PermissionLevel> = {
   'sandbox_status': PermissionLevel.READ_ONLY,
   'sandbox_file': PermissionLevel.MUTATING,
 
-  'sandbox_files': PermissionLevel.MUTATING,
+  'sandbox_store': PermissionLevel.MUTATING,
 
   'list_issues': PermissionLevel.READ_ONLY,
   'list_pull_requests': PermissionLevel.READ_ONLY,
@@ -253,7 +253,7 @@ const DESTRUCTIVE_TOOLS = new Set([
   'delete_service', 'delete_env_var', 'update_env_vars', 'restart_service', 'trigger_deploy', 'cancel_deploy',
   'sandbox_exec', 'sandbox_run', 'sandbox_install', 'sandbox_reset', 'sandbox_file',
   'git_commit_push', 'git_checkout', 'git_pull',
-  'sandbox_files'
+  'sandbox_store'
 ]);
 
 const IDEMPOTENT_WRITE_TOOLS = new Set(['set_active_context', 'select_workspace', 'sandbox_reset']);
@@ -363,7 +363,7 @@ export const TOOL_CATEGORY: Record<string, ToolCategory> = {
   sandbox_output: 'sandbox',
   sandbox_file: 'sandbox',
 
-  sandbox_files: 'files'
+  sandbox_store: 'files'
 };
 
 export function makeRegistrar(server: any, registry: Record<string, any>) {

@@ -191,8 +191,8 @@ class MongoFileStore implements FileStore {
     if (++this.sweepCount % 6 === 0) {
       const ids = await db.collection(`${BUCKET}.chunks`).aggregate([{ $group: { _id: '$files_id' } }, { $limit: 2000 }]).toArray();
       if (ids.length) {
-        const alive = new Set((await db.collection(`${BUCKET}.files`).find({ _id: { $in: ids.map((i) => i._id) } }, { projection: { _id: 1 } }).toArray()).map((d) => String(d._id)));
-        const orphans = ids.map((i) => i._id).filter((id) => !alive.has(String(id)));
+        const alive = new Set((await db.collection(`${BUCKET}.files`).find({ _id: { $in: ids.map((i: any) => i._id) } }, { projection: { _id: 1 } }).toArray()).map((d: any) => String(d._id)));
+        const orphans = ids.map((i: any) => i._id).filter((id: any) => !alive.has(String(id)));
         if (orphans.length) await db.collection(`${BUCKET}.chunks`).deleteMany({ files_id: { $in: orphans } });
       }
     }
@@ -318,8 +318,8 @@ export async function shareFile(
   if (data.length > limit) throw new Error(`File exceeds the ${(limit / 1024 / 1024).toFixed(0)}MB limit.`);
 
   const usage = await store.usage(ownerKey);
-  if (usage.count >= fileConfig.maxFilesPerOwner) throw new Error(`File quota reached (${fileConfig.maxFilesPerOwner} active files). Delete some with sandbox_files action:delete.`);
-  if (usage.bytes + data.length > fileConfig.maxBytesPerOwner) throw new Error('Storage quota reached. Delete some files with sandbox_files action:delete.');
+  if (usage.count >= fileConfig.maxFilesPerOwner) throw new Error(`File quota reached (${fileConfig.maxFilesPerOwner} active files). Delete some with sandbox_store action:delete.`);
+  if (usage.bytes + data.length > fileConfig.maxBytesPerOwner) throw new Error('Storage quota reached. Delete some files with sandbox_store action:delete.');
 
   const ttl = Math.min(Math.max(1, Math.floor(input.ttlHours ?? fileConfig.ttlHours)), fileConfig.ttlHours);
   const expiresAt = new Date(Date.now() + ttl * 3600 * 1000);
@@ -453,20 +453,20 @@ export async function downloadToSandbox(sessionId: string, input: { url: string;
     sizeBytes: fetched.body.length,
     contentType: fetched.contentType.split(';')[0] || 'unknown',
     sha256: crypto.createHash('sha256').update(fetched.body).digest('hex'),
-    note: 'Saved in the sandbox. Use sandbox_exec/sandbox_run to process it, or sandbox_files action:share to hand it to the user.'
+    note: 'Saved in the sandbox. Use sandbox_exec/sandbox_run to process it, or sandbox_store action:share to hand it to the user.'
   };
 }
 
 function decodeURIComponentSafe(s: string): string { try { return decodeURIComponent(s); } catch { return s; } }
 
 // ---------------------------------------------------------------------------------------------
-// MCP tool: sandbox_files (share / list / delete / download)
+// MCP tool: sandbox_store (share / list / delete / download)
 // ---------------------------------------------------------------------------------------------
 
 export function registerFileTools(server: any, sessionId: string, registry: Record<string, any>, getBaseUrl: () => string) {
   const reg = makeRegistrar(server, registry);
 
-  reg('sandbox_files', {
+  reg('sandbox_store', {
     description:
       'Move files between the sandbox, the internet and the user. Actions:\n' +
       '- share: upload a sandbox file (sandboxPath) or small inline content (content/content_b64 + filename) to MongoDB and get a private downloadUrl — GIVE THAT URL TO THE USER. Files auto-delete after at most 48h (ttlHours can only shorten).\n' +
@@ -486,7 +486,7 @@ export function registerFileTools(server: any, sessionId: string, registry: Reco
       all: z.boolean().optional().describe('delete: delete every file you shared.'),
       url: z.string().url().max(2048).optional().describe('download: http(s) URL to fetch.')
     },
-    annotations: getToolAnnotations('sandbox_files')
+    annotations: getToolAnnotations('sandbox_store')
   }, async (args: any) => {
     try {
       const ownerKey = getAuthKeyForSession(sessionId);

@@ -145,7 +145,7 @@ async function resolveDir(sessionId: string, dir?: string): Promise<string> {
   return target;
 }
 
-/** Resolve a file inside the caller's sandbox (used by sandbox_files). Never escapes the sandbox root. */
+/** Resolve a file inside the caller's sandbox (used by sandbox_store). Never escapes the sandbox root. */
 export async function resolveSandboxFile(sessionId: string, filePath: string, dir?: string): Promise<{ root: string; abs: string }> {
   const root = await sandboxRoot(sessionId);
   const base = await resolveDir(sessionId, dir);
@@ -349,7 +349,7 @@ export function registerSandboxTools(server: McpServer, sessionId: string, githu
   const reg = makeRegistrar(server, registry);
 
   reg('sandbox_exec', {
-    description: 'Run a shell command as an unprivileged sandbox user. By default runs in a persistent shell that keeps cd/export/venv state across calls (like a real terminal) — pass `persistent:false` for an isolated one-off exec instead. Pass `dir` for a one-off working directory (state changes in that call do not persist). Pass `background:true` to run detached and track it via sandbox_ps (always isolated, unaffected by `persistent`). Files you create here can be handed to the user with sandbox_files (action:share).',
+    description: 'Run a shell command as an unprivileged sandbox user. By default runs in a persistent shell that keeps cd/export/venv state across calls (like a real terminal) — pass `persistent:false` for an isolated one-off exec instead. Pass `dir` for a one-off working directory (state changes in that call do not persist). Pass `background:true` to run detached and track it via sandbox_ps (always isolated, unaffected by `persistent`). Files you create here can be handed to the user with sandbox_store (action:share).',
     inputSchema: {
       command: z.string().min(1).max(100000),
       timeoutMs: z.number().int().positive().optional(),
@@ -402,7 +402,7 @@ export function registerSandboxTools(server: McpServer, sessionId: string, githu
   });
 
   reg('sandbox_run', {
-    description: 'Run code as an unprivileged sandbox user: pass inline `code` (+ optional `lang`, default py) or an existing `filePath`. Langs: py,js,ts,sh,go,java,cpp,c,rust,ruby,php. Pass `dir` to run in any sandbox directory instead of the default workDir. Files the code writes can be handed to the user with sandbox_files (action:share).',
+    description: 'Run code as an unprivileged sandbox user: pass inline `code` (+ optional `lang`, default py) or an existing `filePath`. Langs: py,js,ts,sh,go,java,cpp,c,rust,ruby,php. Pass `dir` to run in any sandbox directory instead of the default workDir. Files the code writes can be handed to the user with sandbox_store (action:share).',
     inputSchema: {
       lang: z.enum(['py', 'js', 'ts', 'sh', 'go', 'java', 'cpp', 'c', 'rust', 'ruby', 'php']).optional(),
       code: z.string().max(1_000_000).optional(),
@@ -553,7 +553,7 @@ export function registerSandboxTools(server: McpServer, sessionId: string, githu
   });
 
   reg('sandbox_file', {
-    description: 'Read, write, append to, edit (find-and-replace via old_str/new_str), or delete a file in the sandbox — safer than shell-escaping content through sandbox_exec. For edit, old_str can be any length — a single line or an entire block — as long as it matches the file exactly once; it is not limited to short snippets. To give a file to the user, use sandbox_files (action:share).',
+    description: 'Read, write, append to, edit (find-and-replace via old_str/new_str), or delete a file in the sandbox — safer than shell-escaping content through sandbox_exec. For edit, old_str can be any length — a single line or an entire block — as long as it matches the file exactly once; it is not limited to short snippets. To give a file to the user, use sandbox_store (action:share).',
     inputSchema: {
       action: z.enum(['read', 'write', 'append', 'edit', 'delete']),
       path: z.string().min(1).max(1024),

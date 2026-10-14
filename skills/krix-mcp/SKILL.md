@@ -95,6 +95,7 @@ Comprehensive, super-detailed documentation and parameter schemas for all tools 
 - `skills/krix-mcp/references/workflows-and-best-practices.md`: End-to-end multi-tool workflows for codebase discovery, surgical editing, feature development, sandbox testing, and Pull Request submission.
 - `skills/krix-mcp/references/render-tools-guide.md`: Exhaustive guide for all 21 Render cloud management tools.
 - `skills/krix-mcp/references/github-extended-tools-guide.md`: Exhaustive guide for all 32 Extended GitHub tools (Issues, PRs, Reviews, Teams, Admin).
+- `skills/krix-mcp/references/file-sharing-guide.md`: How to use `sandbox_files` — download URLs into the sandbox, then share results with the user via a private MongoDB-backed link (auto-deleted after 48h), list and delete.
 
 ---
 

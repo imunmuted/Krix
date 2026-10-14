@@ -16,6 +16,7 @@ import {
   type RunResult
 } from './sandboxProc.js';
 import fsp from 'node:fs/promises';
+import { getMongoStorageStatus } from './fileShare.js';
 
 interface ActiveProcess {
   pid: number;
@@ -633,7 +634,7 @@ export function registerSandboxTools(server: McpServer, sessionId: string, githu
   });
 
   reg('sandbox_status', {
-    description: 'Check available runtimes, memory, isolation status, and the active repo/branch.',
+    description: 'Check available runtimes, memory, MongoDB connection & storage quota, isolation status, and active repo/branch.',
     inputSchema: {},
     annotations: getToolAnnotations('sandbox_status')
   }, async () => {
@@ -661,12 +662,14 @@ export function registerSandboxTools(server: McpServer, sessionId: string, githu
         } catch { cloned = false; }
       }
       const iso = getIsolation();
+      const mongoDb = await getMongoStorageStatus(sessionId);
 
       return formatOptimizedResponse({
         serverRssMB: Math.round(process.memoryUsage().rss / (1024 * 1024)),
         systemFreeMemMB: Math.round(os.freemem() / (1024 * 1024)),
         runtimes,
         isolation: iso.enforced ? 'enforced (unprivileged sandbox user)' : `NOT enforced (${iso.reason})`,
+        mongoDb,
         repo: ctx.owner && ctx.repo ? `${ctx.owner}/${ctx.repo}` : undefined,
         branch: ctx.branch,
         cloned,

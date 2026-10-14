@@ -537,6 +537,89 @@ export async function shareFile(
   };
 }
 
+export interface MongoStorageStatus {
+  configured: boolean;
+  connected: boolean;
+  database?: string;
+  storage?: {
+    availableMB: number;
+    usedMB: number;
+    maxMB: number;
+    percentUsed: string;
+    usedBytes: number;
+    maxBytes: number;
+  };
+  files?: {
+    totalCount: number;
+    maxCount: number;
+    availableSlots: number;
+    permanentCount: number;
+    expiredCount: number;
+  };
+  defaultTtlHours?: number;
+  message?: string;
+  error?: string;
+}
+
+/** Check MongoDB connection status and calculate available storage quota for the caller's session. */
+export async function getMongoStorageStatus(sessionId: string): Promise<MongoStorageStatus> {
+  if (!process.env.MONGODB_URI && !activeStore) {
+    return {
+      configured: false,
+      connected: false,
+      message: 'MONGODB_URI is not configured on the server. Persistent file storage and sandbox_store are disabled.'
+    };
+  }
+
+  try {
+    const ownerKey = getAuthKeyForSession(sessionId);
+    const store = getFileStore();
+
+    const usagePromise = store.usage(ownerKey);
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('MongoDB connection timed out after 5000ms')), 5000).unref()
+    );
+    const u = await Promise.race([usagePromise, timeoutPromise]);
+
+    const maxBytes = fileConfig.maxBytesPerOwner;
+    const usedBytes = u.bytes;
+    const availableBytes = Math.max(0, maxBytes - usedBytes);
+
+    const usedMB = parseFloat((usedBytes / (1024 * 1024)).toFixed(2));
+    const maxMB = Math.round(maxBytes / (1024 * 1024));
+    const availableMB = parseFloat((availableBytes / (1024 * 1024)).toFixed(2));
+    const percentUsed = `${Math.min(100, Math.round((usedBytes / maxBytes) * 100))}%`;
+
+    return {
+      configured: true,
+      connected: true,
+      database: fileConfig.dbName,
+      storage: {
+        availableMB,
+        usedMB,
+        maxMB,
+        percentUsed,
+        usedBytes,
+        maxBytes
+      },
+      files: {
+        totalCount: u.count,
+        maxCount: fileConfig.maxFilesPerOwner,
+        availableSlots: Math.max(0, fileConfig.maxFilesPerOwner - u.count),
+        permanentCount: u.permanentCount,
+        expiredCount: u.expiredCount
+      },
+      defaultTtlHours: fileConfig.ttlHours
+    };
+  } catch (err: any) {
+    return {
+      configured: true,
+      connected: false,
+      error: sanitizeOutput(String(err?.message || err))
+    };
+  }
+}
+
 // ---------------------------------------------------------------------------------------------
 // Internet downloads into the sandbox
 // ---------------------------------------------------------------------------------------------

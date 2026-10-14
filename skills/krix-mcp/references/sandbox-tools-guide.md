@@ -38,7 +38,7 @@ To prevent any confusion between similarly named tools:
 | **Primary Scope** | Local sandbox disk operations | Cloud file sharing & external URL downloads |
 | **Actions** | `read`, `write`, `append`, `edit`, `delete` | `share`, `list`, `delete`, `download` |
 | **Storage Backend** | Local sandbox container directory | MongoDB GridFS (for sharing) / Local disk (for downloads) |
-| **User Interaction** | Internal file reading & editing for agent | Generates private 48-hour download links for the user |
+| **User Interaction** | Internal file reading & editing for agent | Generates private 72-hour (or permanent) download links for the user |
 | **When to Use** | When reading/writing source code, editing configuration, or inspecting local files safely without shell escaping | When fetching assets from the web into the sandbox, or giving processed output files to the user |
 
 ---
@@ -56,10 +56,39 @@ Outbound access is governed by security restriction levels:
 ## 1. `sandbox_status`
 
 ### Purpose & Overview
-Inspects the local sandbox container health, installed system runtimes (Node.js, Python, Go, Rust, Java, GCC, Ruby, PHP), memory and disk usage, active cloned repository path, active branch, and persistent shell status.
+Inspects the local sandbox container health, installed system runtimes (Node.js, Python, Go, Rust, Java, GCC, Ruby, PHP), memory usage, **MongoDB connection & storage availability** (bytes/MB quota, available storage, file slots, and active/permanent file counts), active cloned repository path, active branch, and persistent shell status.
 
 ### Schema & Parameters
 - Takes no parameters (`{}`).
+
+### Response Fields
+- `serverRssMB` (number): Node process resident memory in MB.
+- `systemFreeMemMB` (number): Host system available free memory in MB.
+- `runtimes` (object): Installed system compilers and interpreters versions (`node`, `python`, `git`, `go`, etc.).
+- `isolation` (string): Linux isolation enforcement state (`enforced (unprivileged sandbox user)` or reason).
+- `mongoDb` (object): Persistent storage backend status:
+  - `configured` (boolean): Whether `MONGODB_URI` environment variable is set.
+  - `connected` (boolean): Whether the MongoDB cluster responded to health/usage checks.
+  - `database` (string): Connected database name (e.g. `krix`).
+  - `storage` (object):
+    - `availableMB` (number): Free quota available for storage in MB.
+    - `usedMB` (number): Total storage consumed by user in MB.
+    - `maxMB` (number): Storage ceiling (defaults to 200MB, configurable via `FILE_MAX_TOTAL_MB_PER_OWNER`).
+    - `percentUsed` (string): Human-readable quota percentage used (e.g. `"2%"`).
+    - `usedBytes` (number): Raw bytes stored.
+    - `maxBytes` (number): Raw quota limit in bytes.
+  - `files` (object):
+    - `totalCount` (number): Total files currently stored.
+    - `maxCount` (number): Maximum file count limit (default 50).
+    - `availableSlots` (number): Remaining file slots before hitting count limit.
+    - `permanentCount` (number): Files marked with `never: true` / permanent retention.
+    - `expiredCount` (number): Expired files awaiting garbage collection sweeper.
+  - `defaultTtlHours` (number): Default file retention window (72 hours).
+- `repo` (string | undefined): Active GitHub repo (`owner/repo`) from context.
+- `branch` (string | undefined): Active checked out branch name.
+- `cloned` (boolean): Whether repository directory is cloned and ready in sandbox.
+- `cwd` (string | undefined): Current relative working directory within the sandbox.
+- `persistentShellAlive` (boolean): Whether background bash shell session is active.
 
 ### Usage Example
 ```json

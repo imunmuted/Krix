@@ -1,4 +1,5 @@
 import vm from 'node:vm';
+import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 
@@ -48,6 +49,10 @@ function hashAuth(token: string): string {
   return crypto.createHash('sha256').update(token || 'anonymous').digest('hex').slice(0, 16);
 }
 
+export function computeAuthKey(githubToken: string): string {
+  return hashAuth(githubToken);
+}
+
 export function registerSessionAuth(sessionId: string, githubToken: string): void {
   sessionAuthKey.set(sessionId, hashAuth(githubToken));
 }
@@ -90,11 +95,14 @@ export function getSessionContext(sessionId: string): SessionContext {
       process.env.DISABLE_SANDBOX_TOOLS !== 'true'
     );
 
+    const enableFiles = enableAll || process.env.ENABLE_FILE_SHARING !== 'false';
+
     const initial: ToolCategory[] = ['core'];
     if (enableIssuesPrs) initial.push('github_issues_prs');
     if (enableAdmin) initial.push('github_admin');
     if (enableRender) initial.push('render');
     if (enableSandbox) initial.push('sandbox');
+    if (enableFiles) initial.push('files');
 
     const key = sessionAuthKey.get(sessionId) || 'anonymous';
     const priorRaw = lastKnownContextByAuth.get(key);
@@ -118,6 +126,8 @@ export function getSessionContext(sessionId: string): SessionContext {
 
 export function updateSessionContext(sessionId: string, patch: Partial<SessionContext>): SessionContext {
   const current = getSessionContext(sessionId);
+  if (patch.cwd !== undefined) patch.cwd = validateSandboxCwd(sessionId, patch.cwd);
+  if (patch.env !== undefined) patch.env = validateUserEnv(patch.env);
   Object.assign(current, patch);
   const known = authBucket(sessionId);
   if ('owner' in patch) known.owner = patch.owner;
@@ -155,6 +165,9 @@ export const TOOL_PERMISSIONS: Record<string, PermissionLevel> = {
   'git_tree': PermissionLevel.READ_ONLY,
   'patch_contents': PermissionLevel.MUTATING,
   'sandbox_status': PermissionLevel.READ_ONLY,
+  'sandbox_file': PermissionLevel.MUTATING,
+
+  'sandbox_files': PermissionLevel.MUTATING,
 
   'list_issues': PermissionLevel.READ_ONLY,
   'list_pull_requests': PermissionLevel.READ_ONLY,
@@ -227,22 +240,36 @@ export const TOOL_PERMISSIONS: Record<string, PermissionLevel> = {
 };
 
 const CLOSED_WORLD_TOOLS = new Set([
-  'set_active_context', 'sandbox_status', 'sandbox_ps', 'sandbox_reset',
+  'set_active_context', 'sandbox_status', 'sandbox_ps', 'sandbox_reset', 'sandbox_output', 'sandbox_file',
   'git_status', 'git_diff'
 ]);
+
+// Tools that can irreversibly destroy or overwrite data or infrastructure, or run arbitrary code.
+// Everything else that mutates is purely additive or git-versioned (recoverable), so MCP clients
+// are told it is not destructive. These hints are advisory only — they never replace server-side checks.
+const DESTRUCTIVE_TOOLS = new Set([
+  'delete_file', 'delete_branch', 'merge_pull_request', 'push_files', 'create_or_update_file',
+  'str_replace_editor', 'patch_contents',
+  'delete_service', 'delete_env_var', 'update_env_vars', 'restart_service', 'trigger_deploy', 'cancel_deploy',
+  'sandbox_exec', 'sandbox_run', 'sandbox_install', 'sandbox_reset', 'sandbox_file',
+  'git_commit_push', 'git_checkout', 'git_pull',
+  'sandbox_files'
+]);
+
+const IDEMPOTENT_WRITE_TOOLS = new Set(['set_active_context', 'select_workspace', 'sandbox_reset']);
 
 export function getToolAnnotations(toolName: string) {
   const isReadOnly = TOOL_PERMISSIONS[toolName] === PermissionLevel.READ_ONLY;
   return {
     title: toolName.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
     readOnlyHint: isReadOnly,
-    destructiveHint: !isReadOnly,
-    idempotentHint: isReadOnly,
+    destructiveHint: !isReadOnly && DESTRUCTIVE_TOOLS.has(toolName),
+    idempotentHint: isReadOnly || IDEMPOTENT_WRITE_TOOLS.has(toolName),
     openWorldHint: !CLOSED_WORLD_TOOLS.has(toolName)
   };
 }
 
-export type ToolCategory = 'core' | 'github_issues_prs' | 'github_admin' | 'render' | 'sandbox';
+export type ToolCategory = 'core' | 'github_issues_prs' | 'github_admin' | 'render' | 'sandbox' | 'files';
 
 export const TOOL_CATEGORY: Record<string, ToolCategory> = {
   set_active_context: 'core',
@@ -332,7 +359,11 @@ export const TOOL_CATEGORY: Record<string, ToolCategory> = {
   git_pull: 'sandbox',
   git_status: 'sandbox',
   git_diff: 'sandbox',
-  git_commit_push: 'sandbox'
+  git_commit_push: 'sandbox',
+  sandbox_output: 'sandbox',
+  sandbox_file: 'sandbox',
+
+  sandbox_files: 'files'
 };
 
 export function makeRegistrar(server: any, registry: Record<string, any>) {
@@ -390,25 +421,64 @@ export function formatError(error: any) {
   };
 }
 
-export function sanitizeOutput(data: any): any {
+// Names of environment variables whose *values* must never appear in any tool output or log line.
+const SECRET_ENV_NAMES = [
+  'MCP_API_KEY', 'GITHUB_PERSONAL_ACCESS_TOKEN', 'GITHUB_PAT', 'RENDER_API_KEY', 'RENDER_PAT',
+  'MONGODB_URI', 'MONGO_URL', 'MONGODB_PASSWORD'
+];
+const dynamicSecrets = new Set<string>();
+
+/** Register a runtime secret (e.g. a per-request GitHub token) so it is scrubbed from every output. */
+export function registerSecret(value: string | undefined | null): void {
+  if (value && value.length >= 8) dynamicSecrets.add(value);
+  if (dynamicSecrets.size > 500) dynamicSecrets.delete(dynamicSecrets.values().next().value as string);
+}
+
+function knownSecretValues(): string[] {
+  const out: string[] = [];
+  for (const name of SECRET_ENV_NAMES) {
+    const v = process.env[name];
+    if (v && v.length >= 8) out.push(v);
+  }
+  for (const v of dynamicSecrets) out.push(v);
+  // Also catch credentials embedded in a connection string (mongodb://user:pass@host).
+  const uri = process.env.MONGODB_URI;
+  if (uri) {
+    const m = uri.match(/^[a-z0-9+.\-]+:\/\/([^:@/\s]+):([^@/\s]+)@/i);
+    if (m) { out.push(m[2]); try { out.push(decodeURIComponent(m[2])); } catch {} }
+  }
+  return out.sort((a, b) => b.length - a.length);
+}
+
+export function sanitizeOutput(data: any, depth: number = 0): any {
   if (data === null || data === undefined) return data;
+  if (depth > 20) return '[TRUNCATED]';
   if (typeof data === 'string') {
-    return data
-      .replace(/(ghp_[a-zA-Z0-9]{36})/g, 'ghp_****')
-      .replace(/(github_pat_[a-zA-Z0-9]{22}_[a-zA-Z0-9]{59})/g, 'github_pat_****')
-      .replace(/(rnd_[a-zA-Z0-9]{24,32})/g, 'rnd_****')
-      .replace(/(Bearer\s+)[a-zA-Z0-9._\-]+/gi, '$1[REDACTED]')
-      .replace(/(x-api-key:\s*)[a-zA-Z0-9._\-]+/gi, '$1[REDACTED]')
-      .replace(/-----BEGIN (RSA|OPENSSH|EC|PRIVATE) KEY-----\n[\s\S]+?\n-----END \1 KEY-----/g, '[REDACTED_KEY]');
+    let s = data;
+    for (const secret of knownSecretValues()) {
+      if (s.includes(secret)) s = s.split(secret).join('[REDACTED]');
+    }
+    return s
+      .replace(/\b(gh[pousr]_)[A-Za-z0-9]{20,}/g, '$1****')
+      .replace(/\b(github_pat_)[A-Za-z0-9_]{20,}/g, '$1****')
+      .replace(/\b(rnd_)[A-Za-z0-9]{16,}/g, '$1****')
+      .replace(/\b(sk-ant-|sk-)[A-Za-z0-9_\-]{20,}/g, '$1****')
+      .replace(/\bAKIA[0-9A-Z]{16}\b/g, 'AKIA****')
+      .replace(/\b(mongodb(?:\+srv)?:\/\/)[^\s'"@/]+:[^\s'"@/]+@/gi, '$1[REDACTED]@')
+      .replace(/(Authorization:\s*(?:Basic|Bearer|Token)\s+)[A-Za-z0-9._~+\/=\-]+/gi, '$1[REDACTED]')
+      .replace(/(Bearer\s+)[A-Za-z0-9._~+\/=\-]+/gi, '$1[REDACTED]')
+      .replace(/(x-api-key:\s*)[A-Za-z0-9._\-]+/gi, '$1[REDACTED]')
+      .replace(/([?&](?:api_key|apikey|access_token|token)=)[^&\s'"]+/gi, '$1[REDACTED]')
+      .replace(/-----BEGIN ([A-Z ]*)PRIVATE KEY-----[\s\S]+?-----END \1PRIVATE KEY-----/g, '[REDACTED_KEY]');
   }
   if (typeof data === 'object') {
     const copy: any = Array.isArray(data) ? [] : {};
     for (const key of Object.keys(data)) {
       const lower = key.toLowerCase();
-      if (lower.includes('token') || lower.includes('secret') || lower.includes('password') || lower.includes('apikey')) {
+      if (lower.includes('token') || lower.includes('secret') || lower.includes('password') || lower.includes('apikey') || lower.includes('api_key')) {
         copy[key] = '[REDACTED]';
       } else {
-        copy[key] = sanitizeOutput(data[key]);
+        copy[key] = sanitizeOutput(data[key], depth + 1);
       }
     }
     return copy;
@@ -416,12 +486,108 @@ export function sanitizeOutput(data: any): any {
   return data;
 }
 
+/** Constant-time string comparison that does not leak length or content through timing. */
+export function safeEqual(a: string | undefined | null, b: string | undefined | null): boolean {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  const ha = crypto.createHash('sha256').update(a).digest();
+  const hb = crypto.createHash('sha256').update(b).digest();
+  return crypto.timingSafeEqual(ha, hb) && a.length === b.length;
+}
+
+/**
+ * Lexically resolve `inputPath` under `rootDir` and refuse anything that escapes it.
+ * Uses path.relative (not startsWith), so `/tmp/root` can never match `/tmp/root-evil`.
+ */
 export function sanitizePath(inputPath: string, rootDir: string = process.cwd()): string {
-  const resolved = path.resolve(rootDir, inputPath);
-  if (!resolved.startsWith(rootDir) && !resolved.startsWith('/tmp')) {
+  if (typeof inputPath !== 'string' || inputPath.length === 0 || inputPath.length > 4096 || inputPath.includes('\0')) {
+    throw new Error('Security Violation: invalid path.');
+  }
+  const root = path.resolve(rootDir);
+  const resolved = path.resolve(root, inputPath);
+  const rel = path.relative(root, resolved);
+  if (rel === '..' || rel.startsWith('..' + path.sep) || path.isAbsolute(rel)) {
     throw new Error(`Security Violation: Path '${inputPath}' escapes sandbox boundary.`);
   }
   return resolved;
+}
+
+/** Root directory of the sandbox that belongs to a session's authenticated identity. */
+export function sandboxRootPath(sessionId: string): string {
+  return path.join(os.tmpdir(), `krix_sbx_${getAuthKeyForSession(sessionId)}`);
+}
+
+function validateSandboxCwd(sessionId: string, cwd: string): string {
+  if (cwd === '') return cwd;
+  return sanitizePath(cwd, sandboxRootPath(sessionId));
+}
+
+const BLOCKED_USER_ENV = new Set([
+  'LD_PRELOAD', 'LD_LIBRARY_PATH', 'LD_AUDIT', 'LD_DEBUG', 'DYLD_INSERT_LIBRARIES', 'DYLD_LIBRARY_PATH',
+  'BASH_ENV', 'ENV', 'PROMPT_COMMAND', 'PS4', 'IFS', 'SHELLOPTS', 'BASHOPTS', 'CDPATH', 'GLOBIGNORE',
+  'PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'TMPDIR', 'PWD',
+  'GIT_ASKPASS', 'SSH_ASKPASS', 'GIT_SSH', 'GIT_SSH_COMMAND', 'GIT_EXTERNAL_DIFF', 'GIT_PROXY_COMMAND', 'GIT_EXEC_PATH', 'GIT_TEMPLATE_DIR',
+  'NODE_PATH', 'PYTHONSTARTUP', 'PYTHONHOME', 'RUBYOPT', 'RUBYLIB', 'PERL5OPT', 'PERL5LIB', 'JAVA_TOOL_OPTIONS', '_JAVA_OPTIONS', 'JDK_JAVA_OPTIONS'
+]);
+const MAX_USER_ENV_VARS = 64;
+
+/** Validate user-supplied sandbox environment variables (names, sizes, and a deny-list of loader/shell hooks). */
+export function validateUserEnv(env: Record<string, string>): Record<string, string> {
+  const entries = Object.entries(env || {});
+  if (entries.length > MAX_USER_ENV_VARS) throw new Error(`Too many env vars (max ${MAX_USER_ENV_VARS}).`);
+  const out: Record<string, string> = {};
+  for (const [k, v] of entries) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(k)) throw new Error(`Invalid env var name '${k.slice(0, 40)}'.`);
+    const upper = k.toUpperCase();
+    if (BLOCKED_USER_ENV.has(upper) || upper.startsWith('GIT_CONFIG') || upper.startsWith('BASH_FUNC_') || upper.startsWith('KRIX_') || SECRET_ENV_NAMES.includes(upper)) {
+      throw new Error(`Env var '${k}' is not allowed.`);
+    }
+    if (typeof v !== 'string' || v.length > 8192 || v.includes('\0')) throw new Error(`Invalid value for env var '${k}'.`);
+    out[k] = v;
+  }
+  return out;
+}
+
+const SAFE_ENV_PASSTHROUGH = [
+  'PATH', 'LANG', 'LC_ALL', 'TZ', 'TERM', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'NODE_EXTRA_CA_CERTS', 'REQUESTS_CA_BUNDLE',
+  'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'no_proxy'
+];
+
+/**
+ * Minimal environment for child processes. Deliberately NOT `...process.env`: the server's
+ * own secrets (MCP_API_KEY, GitHub/Render tokens, MONGODB_URI) must never reach user-driven code.
+ */
+export function scrubbedBaseEnv(): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = {};
+  for (const k of SAFE_ENV_PASSTHROUGH) {
+    if (process.env[k] !== undefined) out[k] = process.env[k];
+  }
+  if (!out.PATH) out.PATH = '/usr/local/bin:/usr/bin:/bin';
+  if (!out.LANG) out.LANG = 'C.UTF-8';
+  return out;
+}
+
+const OWNER_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
+const REPO_RE = /^[A-Za-z0-9._-]{1,100}$/;
+
+export function assertValidOwnerRepo(owner: string, repo: string): void {
+  if (!OWNER_RE.test(owner)) throw new Error('Invalid repository owner.');
+  if (!REPO_RE.test(repo) || repo === '.' || repo === '..') throw new Error('Invalid repository name.');
+}
+
+/** Git ref/branch names used on a command line: no leading dash, no shell/ref metacharacters. */
+export function assertValidRef(ref: string): void {
+  if (typeof ref !== 'string' || ref.length === 0 || ref.length > 255 ||
+      ref.startsWith('-') || ref.startsWith('/') || ref.endsWith('/') || ref.endsWith('.') || ref.endsWith('.lock') ||
+      ref.includes('..') || ref.includes('//') || ref.includes('@{') || /[\s~^:?*\[\\\x00-\x1f\x7f'"`$;&|<>(){}!#]/.test(ref)) {
+    throw new Error('Invalid git ref/branch name.');
+  }
+}
+
+const PKG_SPEC_RE = /^(?:@[a-z0-9][a-z0-9._~-]*\/)?[A-Za-z0-9][A-Za-z0-9._~-]*(?:(?:@|==|>=|<=|~=|!=|>|<)[A-Za-z0-9._~^*+\-|<>=! ]{1,60})?(?:\[[A-Za-z0-9,_\-]{1,40}\])?$/;
+export function assertValidPackageSpec(spec: string): void {
+  if (typeof spec !== 'string' || spec.length === 0 || spec.length > 200 || spec.startsWith('-') || !PKG_SPEC_RE.test(spec) || /(?:^|[\s:/])(?:file|git\+?|https?|ssh|link):/i.test(spec)) {
+    throw new Error(`Invalid or unsupported package spec '${String(spec).slice(0, 60)}'. Only registry package names (with an optional version) are allowed.`);
+  }
 }
 
 export function getNetworkRestrictionLevel(): 'low' | 'medium' | 'high' {
@@ -441,13 +607,19 @@ export function getCommandRestrictionLevel(): 'low' | 'medium' | 'high' {
 export function sanitizeNetworkInCommand(cmd: string): void {
   const netLevel = getNetworkRestrictionLevel();
 
+  // Best-effort guardrail only: string matching cannot stop DNS tricks, redirects or encoded addresses.
+  // Real egress control must come from the container / network policy (see SECURITY notes in README).
   const privateIpPatterns = [
-    /169\.254\.169\.254/,
-    /127\.0\.0\.1/,
-    /0\.0\.0\.0/,
-    /localhost/i,
-    /::1/,
+    /169\.254\.\d{1,3}\.\d{1,3}/,
+    /metadata\.google\.internal|metadata\.azure\.com|instance-data/i,
+    /\b127\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/,
+    /\b0\.0\.0\.0\b/,
+    /\blocalhost\b/i,
+    /\[::1?\]|(?<![:\w]):{2}1(?![:\w])|::ffff:/i,
+    /\bfe80:|\bfd[0-9a-f]{2}:/i,
+    /\b0x7f[0-9a-f]{6}\b|\b2130706433\b|\b0177\.0*\.0*\.0*1\b/i,
     /\b10\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/,
+    /\b100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d{1,3}\.\d{1,3}\b/,
     /\b172\.(1[6-9]|2[0-9]|3[0-1])\.\d{1,3}\.\d{1,3}\b/,
     /\b192\.168\.\d{1,3}\.\d{1,3}\b/
   ];
@@ -505,13 +677,14 @@ export function sanitizeNetworkInCommand(cmd: string): void {
 
 export function sanitizeCommand(cmd: string): void {
   const cmdLevel = getCommandRestrictionLevel();
+  // Best-effort guardrails against accidents. They are NOT a security boundary — a determined
+  // user can obfuscate any command. The real boundary is the unprivileged sandbox user + container.
   const lowPatterns = [
-    /rm\s+-rf\s+[\/]/i,
-    /rm\s+-rf\s+\/\*/i,
-    /mkfs/i,
-    /dd\s+if=/i,
-    />\s*\/dev\/sd/i,
-    /:()\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;/i
+    /\brm\s+(?:-[a-z]+\s+)*-[a-z]*[rR][a-z]*\s+(?:-[a-z]+\s+)*(?:--no-preserve-root\s+)?(?:\/|~|\$HOME|\$\{HOME\})(?:\s|\/?\*|$)/,
+    /\bmkfs/i,
+    /\bdd\s+if=/i,
+    />\s*\/dev\/(?:sd|nvme|vd|hd)/i,
+    /:\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:/
   ];
   const medPatterns = [
     ...lowPatterns,

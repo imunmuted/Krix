@@ -1,7 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { Octokit } from '@octokit/rest';
 import { z } from 'zod';
-import { formatOptimizedResponse, formatError, getToolAnnotations, resolveInputString, getSessionContext, updateSessionContext, makeRegistrar } from './security.js';
+import { formatOptimizedResponse, formatError, getToolAnnotations, resolveInputString, getSessionContext, updateSessionContext, makeRegistrar, assertValidOwnerRepo, assertValidRef } from './security.js';
 
 function handleGitHubError(err: any): any {
   if (err?.status === 403 && err?.headers?.['x-ratelimit-remaining'] === '0') {
@@ -20,6 +20,7 @@ function resolveRepo(inputOwner: string | undefined, inputRepo: string | undefin
   if (!owner || !repo) {
     throw new Error('Target repository context missing. Pass owner/repo or call set_active_context tool once.');
   }
+  assertValidOwnerRepo(owner, repo);
   return { owner, repo };
 }
 
@@ -86,6 +87,8 @@ function getBestMatchFeedback(content: string, oldStr: string): string {
   let bestStartIdx = -1;
   let bestEndIdx = -1;
   if (!oldStr.trim()) return "Error: Target old_str is blank.";
+  // The fuzzy hint is O(windows x len^2); skip it for large inputs so it cannot be used to burn CPU.
+  if (oldStr.length > 3000 || n > 5000) return "Error: Target old_str sequence block not found in file. Check formatting, indentation, and brackets inside old_str precisely.";
 
   for (let i = 0; i <= n - m; i++) {
     const window = contentLines.slice(i, i + m).join('\n');
@@ -138,7 +141,11 @@ export function registerGitHubTools(server: McpServer, octokit: Octokit, session
     if (cwd !== undefined) patch.cwd = cwd;
     if (env !== undefined) patch.env = env;
     if (Object.keys(patch).length === 0) return formatError('Provide at least one of owner/repo/branch/cwd/env.');
-    updateSessionContext(sessionId, patch);
+    try {
+      if (owner !== undefined && repo !== undefined) assertValidOwnerRepo(owner, repo);
+      if (branch !== undefined) assertValidRef(branch);
+      updateSessionContext(sessionId, patch);
+    } catch (err) { return formatError(err); }
     const parts: string[] = [];
     if (owner && repo) parts.push(`repo '${owner}/${repo}'${branch ? ` on branch '${branch}'` : ''}`);
     if (cwd) parts.push(`cwd '${cwd}'`);
@@ -223,16 +230,25 @@ export function registerGitHubTools(server: McpServer, octokit: Octokit, session
       if (Array.isArray(fileData.data) || !('content' in fileData.data)) throw new Error('Target is not a file.');
       const raw = Buffer.from(fileData.data.content, 'base64').toString('utf-8');
 
+      // Match on LF-normalised text, but write back with the file's original line endings.
+      const usesCrlf = raw.includes('\r\n');
       const normalizedContent = raw.replace(/\r\n/g, '\n');
       const normalizedOld = resolvedOld.replace(/\r\n/g, '\n');
       const normalizedNew = resolvedNew.replace(/\r\n/g, '\n');
 
-      if (!normalizedContent.includes(normalizedOld)) {
+      const occurrences = normalizedContent.split(normalizedOld).length - 1;
+      if (occurrences === 0) {
         const feedback = getBestMatchFeedback(normalizedContent, normalizedOld);
         throw new Error(feedback);
       }
+      if (occurrences > 1) {
+        throw new Error(`old_str matches ${occurrences} places — include more surrounding context so it matches exactly once.`);
+      }
 
-      const updated = normalizedContent.replace(normalizedOld, normalizedNew);
+      // Slice instead of String.replace: replace() would interpret `$&`, `$1`, `$$` in new_str.
+      const at = normalizedContent.indexOf(normalizedOld);
+      let updated = normalizedContent.slice(0, at) + normalizedNew + normalizedContent.slice(at + normalizedOld.length);
+      if (usesCrlf) updated = updated.replace(/\n/g, '\r\n');
       const res = await octokit.repos.createOrUpdateFileContents({
         owner: target.owner, repo: target.repo, path, message, content: Buffer.from(updated, 'utf-8').toString('base64'), branch: activeBranch, sha: fileData.data.sha
       });
@@ -420,7 +436,11 @@ export function registerGitHubTools(server: McpServer, octokit: Octokit, session
         throw new Error(`Invalid line coordinates. Target file has ${lines.length} lines.`);
       }
 
-      lines.splice(startLine - 1, endLine - startLine + 1, ...resolvedNew.split('\n'));
+      // Keep the file's existing line-ending style when splicing in new lines.
+      const eol = raw.includes('\r\n') ? '\r\n' : '\n';
+      const lastLineKeepsEol = endLine < lines.length;
+      const newLines = resolvedNew.replace(/\r\n/g, '\n').split('\n').map((l, i, a) => (eol === '\r\n' && (i < a.length - 1 || lastLineKeepsEol) ? l + '\r' : l));
+      lines.splice(startLine - 1, endLine - startLine + 1, ...newLines);
       const updated = lines.join('\n');
       const res = await octokit.repos.createOrUpdateFileContents({
         owner: target.owner, repo: target.repo, path, message, content: Buffer.from(updated, 'utf-8').toString('base64'), branch: activeBranch, sha: fileData.data.sha

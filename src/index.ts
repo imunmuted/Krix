@@ -13,7 +13,8 @@ dotenv.config();
 
 import {
   SERVER_ICONS, getServerIcons, ICON_48_DATA_URI, ICON_48_BUFFER, ICON_24_BUFFER,
-  GITHUB_ICON_48_URL, GITHUB_ICON_128_URL, GITHUB_LOGO_URL
+  GITHUB_ICON_48_URL, GITHUB_ICON_128_URL, GITHUB_LOGO_URL,
+  RENDER_PUBLIC_URL, RENDER_ICON_48_URL, RENDER_ICON_128_URL, RENDER_LOGO_URL
 } from './icons.js';
 import { registerGitHubTools } from './githubTools.js';
 import { registerRenderTools } from './renderTools.js';
@@ -110,6 +111,7 @@ function createMasterServer(githubToken: string, renderToken: string | undefined
 
   (server.server as any)._serverInfo.icon = GITHUB_ICON_48_URL;
   (server.server as any)._serverInfo.iconUrl = GITHUB_ICON_48_URL;
+  (server.server as any)._serverInfo.logo = GITHUB_LOGO_URL;
   (server.server as any)._serverInfo.logoUrl = GITHUB_LOGO_URL;
   (server.server as any)._serverInfo.iconDataUri = ICON_48_DATA_URI;
   (server.server as any)._serverInfo.icons = serverIcons;
@@ -384,8 +386,11 @@ app.get(['/manifest.json', '/manifest.webmanifest'], (req, res) => {
     display: 'standalone',
     icons: [
       { src: GITHUB_ICON_48_URL, sizes: '48x48', type: 'image/png' },
+      { src: RENDER_ICON_48_URL, sizes: '48x48', type: 'image/png' },
       { src: GITHUB_ICON_128_URL, sizes: '128x128', type: 'image/png' },
+      { src: RENDER_ICON_128_URL, sizes: '128x128', type: 'image/png' },
       { src: GITHUB_LOGO_URL, sizes: '320x320', type: 'image/png' },
+      { src: RENDER_LOGO_URL, sizes: '320x320', type: 'image/png' },
       { src: `${base}/icon-48.png`, sizes: '48x48', type: 'image/png' },
       { src: `${base}/icon-128.png`, sizes: '128x128', type: 'image/png' },
       { src: `${base}/logo.png`, sizes: '320x320', type: 'image/png' }
@@ -438,11 +443,15 @@ app.get('/gemini-extension.json', (req, res) => {
     version: '1.1.0',
     description: 'Advanced agentic developer gateway for remote GitHub discovery, Render cloud management, sandboxed execution, and persistent storage.',
     icon: GITHUB_ICON_48_URL,
+    iconUrl: GITHUB_ICON_48_URL,
+    logo: GITHUB_LOGO_URL,
+    logoUrl: GITHUB_LOGO_URL,
     icons: getServerIcons(base),
     mcpServers: {
       krix: {
         description: 'Advanced agentic developer gateway for remote GitHub discovery, Render cloud management, sandboxed execution, and persistent storage.',
         httpUrl: `${base}/mcp`,
+        url: `${base}/mcp`,
         headers: {
           'x-api-key': '$MCP_API_KEY'
         }

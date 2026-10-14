@@ -4,26 +4,59 @@
   "version": "1.1.0",
   "description": "Advanced agentic developer gateway for remote GitHub discovery, Render cloud management, sandboxed execution, and persistent storage.",
   "icon": "https://raw.githubusercontent.com/imunmuted/Krix/gem/assets/icon-48.png",
+  "iconUrl": "https://raw.githubusercontent.com/imunmuted/Krix/gem/assets/icon-48.png",
+  "logo": "https://raw.githubusercontent.com/imunmuted/Krix/gem/assets/logo.png",
+  "logoUrl": "https://raw.githubusercontent.com/imunmuted/Krix/gem/assets/logo.png",
   "icons": [
     {
       "src": "https://raw.githubusercontent.com/imunmuted/Krix/gem/assets/icon-48.png",
+      "url": "https://raw.githubusercontent.com/imunmuted/Krix/gem/assets/icon-48.png",
       "mimeType": "image/png",
       "sizes": ["48x48"],
       "theme": "light"
     },
     {
       "src": "https://raw.githubusercontent.com/imunmuted/Krix/gem/assets/icon-48.png",
+      "url": "https://raw.githubusercontent.com/imunmuted/Krix/gem/assets/icon-48.png",
+      "mimeType": "image/png",
+      "sizes": ["48x48"],
+      "theme": "dark"
+    },
+    {
+      "src": "https://krix.onrender.com/icon-48.png",
+      "url": "https://krix.onrender.com/icon-48.png",
+      "mimeType": "image/png",
+      "sizes": ["48x48"],
+      "theme": "light"
+    },
+    {
+      "src": "https://krix.onrender.com/icon-48.png",
+      "url": "https://krix.onrender.com/icon-48.png",
       "mimeType": "image/png",
       "sizes": ["48x48"],
       "theme": "dark"
     },
     {
       "src": "https://raw.githubusercontent.com/imunmuted/Krix/gem/assets/icon-128.png",
+      "url": "https://raw.githubusercontent.com/imunmuted/Krix/gem/assets/icon-128.png",
+      "mimeType": "image/png",
+      "sizes": ["128x128"]
+    },
+    {
+      "src": "https://krix.onrender.com/icon-128.png",
+      "url": "https://krix.onrender.com/icon-128.png",
       "mimeType": "image/png",
       "sizes": ["128x128"]
     },
     {
       "src": "https://raw.githubusercontent.com/imunmuted/Krix/gem/assets/logo.png",
+      "url": "https://raw.githubusercontent.com/imunmuted/Krix/gem/assets/logo.png",
+      "mimeType": "image/png",
+      "sizes": ["320x320"]
+    },
+    {
+      "src": "https://krix.onrender.com/logo.png",
+      "url": "https://krix.onrender.com/logo.png",
       "mimeType": "image/png",
       "sizes": ["320x320"]
     }
@@ -32,6 +65,7 @@
     "krix": {
       "description": "Advanced agentic developer gateway for remote GitHub discovery, Render cloud management, sandboxed execution, and persistent storage.",
       "httpUrl": "/mcp",
+      "url": "https://krix.onrender.com/mcp",
       "headers": {
         "x-api-key": "$MCP_API_KEY"
       }

@@ -11,23 +11,53 @@
   "icons": [
     {
       "src": "https://raw.githubusercontent.com/imunmuted/Krix/gem/assets/icon-48.png",
+      "url": "https://raw.githubusercontent.com/imunmuted/Krix/gem/assets/icon-48.png",
       "mimeType": "image/png",
       "sizes": ["48x48"],
       "theme": "light"
     },
     {
       "src": "https://raw.githubusercontent.com/imunmuted/Krix/gem/assets/icon-48.png",
+      "url": "https://raw.githubusercontent.com/imunmuted/Krix/gem/assets/icon-48.png",
+      "mimeType": "image/png",
+      "sizes": ["48x48"],
+      "theme": "dark"
+    },
+    {
+      "src": "https://krix.onrender.com/icon-48.png",
+      "url": "https://krix.onrender.com/icon-48.png",
+      "mimeType": "image/png",
+      "sizes": ["48x48"],
+      "theme": "light"
+    },
+    {
+      "src": "https://krix.onrender.com/icon-48.png",
+      "url": "https://krix.onrender.com/icon-48.png",
       "mimeType": "image/png",
       "sizes": ["48x48"],
       "theme": "dark"
     },
     {
       "src": "https://raw.githubusercontent.com/imunmuted/Krix/gem/assets/icon-128.png",
+      "url": "https://raw.githubusercontent.com/imunmuted/Krix/gem/assets/icon-128.png",
+      "mimeType": "image/png",
+      "sizes": ["128x128"]
+    },
+    {
+      "src": "https://krix.onrender.com/icon-128.png",
+      "url": "https://krix.onrender.com/icon-128.png",
       "mimeType": "image/png",
       "sizes": ["128x128"]
     },
     {
       "src": "https://raw.githubusercontent.com/imunmuted/Krix/gem/assets/logo.png",
+      "url": "https://raw.githubusercontent.com/imunmuted/Krix/gem/assets/logo.png",
+      "mimeType": "image/png",
+      "sizes": ["320x320", "any"]
+    },
+    {
+      "src": "https://krix.onrender.com/logo.png",
+      "url": "https://krix.onrender.com/logo.png",
       "mimeType": "image/png",
       "sizes": ["320x320", "any"]
     }
@@ -35,7 +65,7 @@
   "remotes": [
     {
       "type": "streamable-http",
-      "url": "https://krix-gateway.onrender.com/mcp",
+      "url": "https://krix.onrender.com/mcp",
       "headers": [
         {
           "name": "x-api-key",

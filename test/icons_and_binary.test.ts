@@ -5,6 +5,7 @@ import path from 'node:path';
 import {
   ICON_48_DATA_URI, ICON_24_DATA_URI, ICON_48_BUFFER, ICON_24_BUFFER,
   GITHUB_RAW_BASE_URL, GITHUB_ICON_48_URL, GITHUB_ICON_128_URL, GITHUB_LOGO_URL,
+  RENDER_PUBLIC_URL, RENDER_ICON_48_URL, RENDER_ICON_128_URL, RENDER_LOGO_URL,
   DEFAULT_PUBLIC_URL, getServerIcons, SERVER_ICONS
 } from '../src/icons.js';
 import { isBinaryBuffer, resolveInputBuffer, resolveInputString } from '../src/security.js';
@@ -20,65 +21,90 @@ describe('Icons and Asset Metadata', () => {
     assert.deepEqual(ICON_24_BUFFER.subarray(0, 8), pngMagic);
   });
 
-  test('GitHub raw URLs point to canonical imunmuted/Krix/gem repository', () => {
+  test('GitHub raw URLs and Render URLs point to canonical endpoints', () => {
     assert.equal(GITHUB_RAW_BASE_URL, 'https://raw.githubusercontent.com/imunmuted/Krix/gem/assets');
     assert.equal(GITHUB_ICON_48_URL, 'https://raw.githubusercontent.com/imunmuted/Krix/gem/assets/icon-48.png');
     assert.equal(GITHUB_ICON_128_URL, 'https://raw.githubusercontent.com/imunmuted/Krix/gem/assets/icon-128.png');
     assert.equal(GITHUB_LOGO_URL, 'https://raw.githubusercontent.com/imunmuted/Krix/gem/assets/logo.png');
+
+    assert.equal(RENDER_PUBLIC_URL, 'https://krix.onrender.com');
+    assert.equal(RENDER_ICON_48_URL, 'https://krix.onrender.com/icon-48.png');
+    assert.equal(RENDER_ICON_128_URL, 'https://krix.onrender.com/icon-128.png');
+    assert.equal(RENDER_LOGO_URL, 'https://krix.onrender.com/logo.png');
+
     assert.equal(DEFAULT_PUBLIC_URL, GITHUB_RAW_BASE_URL);
   });
 
-  test('getServerIcons provides both embedded data URIs and public GitHub URLs', () => {
+  test('getServerIcons provides public HTTPS URLs first followed by embedded data URIs and dual src/url fields', () => {
     const icons = getServerIcons();
-    assert.ok(icons.length >= 6);
+    assert.ok(icons.length >= 8);
+
+    // Verify HTTPS URLs come first (required by MCP schema maxLength 255 and Gemini proxy compatibility)
+    assert.ok(icons[0].src.startsWith('https://'), 'First icon MUST be a public HTTPS URL');
+    assert.ok(icons[1].src.startsWith('https://'), 'Second icon MUST be a public HTTPS URL');
+
+    // Verify dual src and url field compatibility on all icons
+    for (const icon of icons) {
+      assert.ok(icon.src, 'Icon must have src property');
+      assert.equal(icon.url, icon.src, 'Icon url property must match src property');
+      assert.ok(!icon.src.includes('krix-gateway.onrender.com'), `Must not reference dead domain: ${icon.src}`);
+    }
+
+    // Canonical GitHub raw URLs
+    const githubLight = icons.find(i => i.src === GITHUB_ICON_48_URL && i.theme === 'light');
+    const githubDark = icons.find(i => i.src === GITHUB_ICON_48_URL && i.theme === 'dark');
+    assert.ok(githubLight, 'Should include light theme GitHub icon-48');
+    assert.ok(githubDark, 'Should include dark theme GitHub icon-48');
+
+    // Live Render web service endpoints
+    const renderLight = icons.find(i => i.src === RENDER_ICON_48_URL && i.theme === 'light');
+    const renderDark = icons.find(i => i.src === RENDER_ICON_48_URL && i.theme === 'dark');
+    assert.ok(renderLight, 'Should include light theme Render icon-48');
+    assert.ok(renderDark, 'Should include dark theme Render icon-48');
 
     // Data URIs for inline zero-network handshake
     const dataUriLight = icons.find(i => i.src.startsWith('data:') && i.theme === 'light');
     const dataUriDark = icons.find(i => i.src.startsWith('data:') && i.theme === 'dark');
     assert.ok(dataUriLight, 'Should include light theme data URI');
     assert.ok(dataUriDark, 'Should include dark theme data URI');
-
-    // Canonical GitHub raw URLs
-    const githubLight = icons.find(i => i.src === GITHUB_ICON_48_URL && i.theme === 'light');
-    const githubDark = icons.find(i => i.src === GITHUB_ICON_48_URL && i.theme === 'dark');
-    const github128 = icons.find(i => i.src === GITHUB_ICON_128_URL);
-    const githubLogo = icons.find(i => i.src === GITHUB_LOGO_URL);
-
-    assert.ok(githubLight, 'Should include light theme GitHub icon-48');
-    assert.ok(githubDark, 'Should include dark theme GitHub icon-48');
-    assert.ok(github128, 'Should include GitHub icon-128');
-    assert.ok(githubLogo, 'Should include GitHub logo');
-
-    // Ensure krix-gateway.onrender.com is never referenced in any icon src
-    for (const icon of icons) {
-      assert.ok(!icon.src.includes('krix-gateway.onrender.com'), `Icon src must not reference dead onrender domain: ${icon.src}`);
-    }
   });
 
   test('getServerIcons appends custom host endpoints when distinct baseUrl is provided', () => {
     const customIcons = getServerIcons('https://my-gateway.example.com');
     const customEndpoint = customIcons.find(i => i.src === 'https://my-gateway.example.com/icon-48.png');
     assert.ok(customEndpoint, 'Should include custom baseUrl endpoints');
+    assert.equal(customEndpoint.url, 'https://my-gateway.example.com/icon-48.png');
   });
 
-  test('server.json and gemini-extension.json do not reference dead krix-gateway.onrender.com for icons', () => {
+  test('server.json and gemini-extension.json do not reference dead krix-gateway.onrender.com anywhere', () => {
     const serverJsonPath = path.resolve(process.cwd(), 'server.json');
     const geminiJsonPath = path.resolve(process.cwd(), 'gemini-extension.json');
 
-    const serverJson = JSON.parse(fs.readFileSync(serverJsonPath, 'utf-8'));
-    const geminiJson = JSON.parse(fs.readFileSync(geminiJsonPath, 'utf-8'));
+    const serverJsonRaw = fs.readFileSync(serverJsonPath, 'utf-8');
+    const geminiJsonRaw = fs.readFileSync(geminiJsonPath, 'utf-8');
+
+    assert.ok(!serverJsonRaw.includes('krix-gateway.onrender.com'), 'server.json must not reference dead onrender domain anywhere');
+    assert.ok(!geminiJsonRaw.includes('krix-gateway.onrender.com'), 'gemini-extension.json must not reference dead onrender domain anywhere');
+
+    const serverJson = JSON.parse(serverJsonRaw);
+    const geminiJson = JSON.parse(geminiJsonRaw);
+
+    assert.equal(serverJson.remotes[0].url, 'https://krix.onrender.com/mcp', 'server.json remotes URL must point to live krix.onrender.com/mcp');
+    assert.equal(geminiJson.mcpServers.krix.url, 'https://krix.onrender.com/mcp', 'gemini-extension.json mcpServers URL must point to live krix.onrender.com/mcp');
 
     for (const icon of serverJson.icons) {
-      assert.ok(!icon.src.includes('krix-gateway.onrender.com'), `server.json icon must not reference dead onrender domain: ${icon.src}`);
-      assert.ok(icon.src.startsWith('https://raw.githubusercontent.com/'), `server.json icon should use raw GitHub URL: ${icon.src}`);
+      assert.ok(icon.src.startsWith('https://'), `server.json icon should use HTTPS URL: ${icon.src}`);
+      assert.equal(icon.url, icon.src, 'server.json icon url property must match src');
     }
 
-    assert.ok(!geminiJson.icon.includes('krix-gateway.onrender.com'), `gemini-extension.json icon must not reference dead onrender domain: ${geminiJson.icon}`);
-    assert.ok(geminiJson.icon.startsWith('https://raw.githubusercontent.com/'), `gemini-extension.json icon should use raw GitHub URL: ${geminiJson.icon}`);
+    assert.ok(geminiJson.icon.startsWith('https://'), `gemini-extension.json icon should use HTTPS URL: ${geminiJson.icon}`);
+    assert.equal(geminiJson.iconUrl, geminiJson.icon);
+    assert.ok(geminiJson.logo.startsWith('https://'));
+    assert.equal(geminiJson.logoUrl, geminiJson.logo);
 
     for (const icon of geminiJson.icons) {
-      assert.ok(!icon.src.includes('krix-gateway.onrender.com'), `gemini-extension.json icon must not reference dead onrender domain: ${icon.src}`);
-      assert.ok(icon.src.startsWith('https://raw.githubusercontent.com/'), `gemini-extension.json icon should use raw GitHub URL: ${icon.src}`);
+      assert.ok(icon.src.startsWith('https://'), `gemini-extension.json icon should use HTTPS URL: ${icon.src}`);
+      assert.equal(icon.url, icon.src, 'gemini-extension.json icon url property must match src');
     }
   });
 });

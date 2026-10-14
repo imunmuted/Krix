@@ -10,22 +10,21 @@ import type { Express, Request, Response } from 'express';
 import { MongoClient, GridFSBucket, ObjectId, type Db } from 'mongodb';
 import { z } from 'zod';
 import {
-  formatOptimizedResponse, formatError, getToolAnnotations, makeRegistrar, getAuthKeyForSession, sanitizeOutput
+  formatOptimizedResponse, formatImageResponse, formatError, getToolAnnotations, makeRegistrar, getAuthKeyForSession, sanitizeOutput
 } from './security.js';
 import { createLimiter, rateLimitMiddleware } from './rateLimit.js';
 import { resolveSandboxFile } from './sandboxTools.js';
 import { sbxReadBytes, sbxStat, sbxMkdirp, sbxWriteText, assertSandboxAllowed } from './sandboxProc.js';
 
 /**
- * Sandbox file tool (share / list / delete / download). Secure file sharing: files created by the AI (in the sandbox, or inline) are stored in MongoDB GridFS
- * and exposed through an unguessable, expiring download link.
+ * Sandbox store tool (share / list / delete / download / view).
+ * Secure file sharing, internet asset downloading, media viewing, and storage lifecycle management:
  *
  *  - Link = 256-bit random token. Only its SHA-256 hash is stored, so a database leak does not reveal live links.
- *  - Every file expires (default and maximum 48h) and is physically deleted (file + chunks) by a sweeper.
- *  - Files are always served as attachments with nosniff + a sandboxing CSP; active content types are
- *    downgraded to application/octet-stream so a shared .html/.svg can never run in the server's origin.
- *  - Ownership: only the identity that created a file can list or delete it.
+ *  - Expiry: default 72 hours, configurable up to 720 hours, or 'never' for permanent retention.
  *  - Quotas: per-file size, per-owner file count / total bytes, and per-owner upload rate.
+ *  - Direct MCP Media Output: returns native MCP image content blocks for inline chat rendering.
+ *  - Internet Download Engine: downloads assets across the internet with modern browser headers and webpage media extraction.
  */
 
 // ---------------------------------------------------------------------------------------------
@@ -39,7 +38,7 @@ function num(name: string, fallback: number, min: number, max: number): number {
 }
 
 export const fileConfig = {
-  get ttlHours() { return num('FILE_TTL_HOURS', 48, 1, 48); },
+  get ttlHours() { return num('FILE_TTL_HOURS', 72, 1, 720); },
   get maxFileBytes() { return Math.floor(num('FILE_MAX_MB', 25, 0.1, 100) * 1024 * 1024); },
   get maxFilesPerOwner() { return Math.floor(num('FILE_MAX_PER_OWNER', 50, 1, 1000)); },
   get maxBytesPerOwner() { return Math.floor(num('FILE_MAX_TOTAL_MB_PER_OWNER', 200, 1, 5000) * 1024 * 1024); },
@@ -59,15 +58,27 @@ export interface StoredFileMeta {
   size: number;
   contentType: string;
   createdAt: Date;
-  expiresAt: Date;
+  expiresAt: Date | null;
+}
+
+export interface ListOwnerOptions {
+  search?: string;
+  status?: 'active' | 'expired' | 'permanent' | 'all';
+  sortBy?: 'size' | 'createdAt' | 'expiresAt' | 'name';
+  sortOrder?: 'asc' | 'desc';
+  limit?: number;
+  offset?: number;
 }
 
 export interface FileStore {
-  put(meta: { name: string; contentType: string; ownerKey: string; tokenHash: string; expiresAt: Date }, data: Buffer): Promise<StoredFileMeta>;
+  put(meta: { name: string; contentType: string; ownerKey: string; tokenHash: string; expiresAt: Date | null }, data: Buffer): Promise<StoredFileMeta>;
   openByTokenHash(tokenHash: string): Promise<(StoredFileMeta & { stream: Readable }) | null>;
-  listByOwner(ownerKey: string): Promise<StoredFileMeta[]>;
-  usage(ownerKey: string): Promise<{ count: number; bytes: number }>;
+  openById(ownerKey: string, id: string): Promise<(StoredFileMeta & { stream: Readable }) | null>;
+  listByOwner(ownerKey: string, options?: ListOwnerOptions): Promise<{ files: StoredFileMeta[]; totalCount: number }>;
+  usage(ownerKey: string): Promise<{ count: number; bytes: number; permanentCount: number; expiredCount: number }>;
   deleteOwned(ownerKey: string, id: string): Promise<boolean>;
+  deleteManyOwned(ownerKey: string, ids: string[]): Promise<number>;
+  deleteFilteredOwned(ownerKey: string, filter: { expiredOnly?: boolean; search?: string }): Promise<number>;
   deleteAllOwned(ownerKey: string): Promise<number>;
   sweepExpired(): Promise<number>;
   close(): Promise<void>;
@@ -114,11 +125,11 @@ class MongoFileStore implements FileStore {
       size: doc.length,
       contentType: doc.metadata?.contentType || 'application/octet-stream',
       createdAt: doc.uploadDate,
-      expiresAt: new Date(doc.metadata?.expiresAt)
+      expiresAt: doc.metadata?.expiresAt ? new Date(doc.metadata.expiresAt) : null
     };
   }
 
-  async put(meta: { name: string; contentType: string; ownerKey: string; tokenHash: string; expiresAt: Date }, data: Buffer): Promise<StoredFileMeta> {
+  async put(meta: { name: string; contentType: string; ownerKey: string; tokenHash: string; expiresAt: Date | null }, data: Buffer): Promise<StoredFileMeta> {
     const { bucket } = await this.init();
     const up = bucket.openUploadStream(meta.name, {
       metadata: { ownerKey: meta.ownerKey, tokenHash: meta.tokenHash, contentType: meta.contentType, expiresAt: meta.expiresAt }
@@ -138,34 +149,131 @@ class MongoFileStore implements FileStore {
     const { bucket } = await this.init();
     const doc = await bucket.find({ 'metadata.tokenHash': tokenHash }).limit(1).next();
     if (!doc) return null;
-    if (!doc.metadata?.expiresAt || new Date(doc.metadata.expiresAt).getTime() <= Date.now()) return null;
+    if (doc.metadata?.expiresAt && new Date(doc.metadata.expiresAt).getTime() <= Date.now()) return null;
     return { ...MongoFileStore.toMeta(doc), stream: bucket.openDownloadStream(doc._id) as unknown as Readable };
   }
 
-  async listByOwner(ownerKey: string): Promise<StoredFileMeta[]> {
+  async openById(ownerKey: string, id: string) {
+    if (!/^[a-f0-9]{24}$/i.test(id)) return null;
     const { bucket } = await this.init();
-    const docs = await bucket.find({ 'metadata.ownerKey': ownerKey, 'metadata.expiresAt': { $gt: new Date() } }).sort({ uploadDate: -1 }).limit(200).toArray();
-    return docs.map(MongoFileStore.toMeta);
+    const _id = new ObjectId(id);
+    const doc = await bucket.find({ _id, 'metadata.ownerKey': ownerKey }).limit(1).next();
+    if (!doc) return null;
+    return { ...MongoFileStore.toMeta(doc), stream: bucket.openDownloadStream(doc._id) as unknown as Readable };
   }
 
-  async usage(ownerKey: string): Promise<{ count: number; bytes: number }> {
+  async listByOwner(ownerKey: string, options: ListOwnerOptions = {}): Promise<{ files: StoredFileMeta[]; totalCount: number }> {
+    const { bucket } = await this.init();
+    const now = new Date();
+    const status = options.status || 'active';
+    const query: Record<string, any> = { 'metadata.ownerKey': ownerKey };
+
+    if (status === 'active') {
+      query.$or = [{ 'metadata.expiresAt': null }, { 'metadata.expiresAt': { $gt: now } }];
+    } else if (status === 'expired') {
+      query['metadata.expiresAt'] = { $ne: null, $lte: now };
+    } else if (status === 'permanent') {
+      query['metadata.expiresAt'] = null;
+    }
+
+    if (options.search && options.search.trim()) {
+      query.filename = { $regex: options.search.trim(), $options: 'i' };
+    }
+
+    const sortField = options.sortBy === 'size' ? 'length'
+      : options.sortBy === 'expiresAt' ? 'metadata.expiresAt'
+      : options.sortBy === 'name' ? 'filename'
+      : 'uploadDate';
+    const sortDir = options.sortOrder === 'asc' ? 1 : -1;
+
+    const limit = Math.min(Math.max(1, options.limit || 20), 100);
+    const offset = Math.max(0, options.offset || 0);
+
+    const [docs, totalCount] = await Promise.all([
+      bucket.find(query).sort({ [sortField]: sortDir }).skip(offset).limit(limit).toArray(),
+      bucket.find(query).count()
+    ]);
+
+    return { files: docs.map(MongoFileStore.toMeta), totalCount };
+  }
+
+  async usage(ownerKey: string): Promise<{ count: number; bytes: number; permanentCount: number; expiredCount: number }> {
     const { db } = await this.init();
+    const now = new Date();
     const rows = await db.collection(`${BUCKET}.files`).aggregate([
-      { $match: { 'metadata.ownerKey': ownerKey, 'metadata.expiresAt': { $gt: new Date() } } },
-      { $group: { _id: null, count: { $sum: 1 }, bytes: { $sum: '$length' } } }
+      { $match: { 'metadata.ownerKey': ownerKey } },
+      {
+        $group: {
+          _id: null,
+          totalCount: { $sum: 1 },
+          totalBytes: { $sum: '$length' },
+          permanentCount: {
+            $sum: { $cond: [{ $eq: ['$metadata.expiresAt', null] }, 1, 0] }
+          },
+          expiredCount: {
+            $sum: {
+              $cond: [
+                { $and: [{ $ne: ['$metadata.expiresAt', null] }, { $lte: ['$metadata.expiresAt', now] }] },
+                1,
+                0
+              ]
+            }
+          }
+        }
+      }
     ]).toArray();
-    return rows[0] ? { count: rows[0].count, bytes: rows[0].bytes } : { count: 0, bytes: 0 };
+    if (!rows[0]) return { count: 0, bytes: 0, permanentCount: 0, expiredCount: 0 };
+    return {
+      count: rows[0].totalCount,
+      bytes: rows[0].totalBytes,
+      permanentCount: rows[0].permanentCount,
+      expiredCount: rows[0].expiredCount
+    };
   }
 
   async deleteOwned(ownerKey: string, id: string): Promise<boolean> {
     if (!/^[a-f0-9]{24}$/i.test(id)) return false;
     const { bucket } = await this.init();
     const _id = new ObjectId(id);
-    // Ownership check happens in the query itself, never from client-provided data.
     const doc = await bucket.find({ _id, 'metadata.ownerKey': ownerKey }).limit(1).next();
     if (!doc) return false;
     await bucket.delete(_id);
     return true;
+  }
+
+  async deleteManyOwned(ownerKey: string, ids: string[]): Promise<number> {
+    const validIds = ids.filter((id) => /^[a-f0-9]{24}$/i.test(id)).map((id) => new ObjectId(id));
+    if (!validIds.length) return 0;
+    const { bucket } = await this.init();
+    const docs = await bucket.find({ _id: { $in: validIds }, 'metadata.ownerKey': ownerKey }).toArray();
+    let deleted = 0;
+    for (const d of docs) {
+      try {
+        await bucket.delete(d._id);
+        deleted++;
+      } catch {}
+    }
+    return deleted;
+  }
+
+  async deleteFilteredOwned(ownerKey: string, filter: { expiredOnly?: boolean; search?: string }): Promise<number> {
+    const { bucket } = await this.init();
+    const query: Record<string, any> = { 'metadata.ownerKey': ownerKey };
+    if (filter.expiredOnly) {
+      query['metadata.expiresAt'] = { $ne: null, $lte: new Date() };
+    }
+    if (filter.search && filter.search.trim()) {
+      query.filename = { $regex: filter.search.trim(), $options: 'i' };
+    }
+    const docs = await bucket.find(query).limit(500).toArray();
+    let deleted = 0;
+    for (const d of docs) {
+      try {
+        await bucket.delete(d._id);
+        deleted++;
+      } catch {}
+    }
+    return deleted;
   }
 
   async deleteAllOwned(ownerKey: string): Promise<number> {
@@ -179,11 +287,12 @@ class MongoFileStore implements FileStore {
 
   async sweepExpired(): Promise<number> {
     const { db, bucket } = await this.init();
-    const expired = await bucket.find({ 'metadata.expiresAt': { $lte: new Date() } }).limit(500).toArray();
+    const now = new Date();
+    // Only sweep documents that have an expiration date in the past (expiresAt != null)
+    const expired = await bucket.find({ 'metadata.expiresAt': { $ne: null, $lte: now } }).limit(500).toArray();
     let deleted = 0;
     for (const f of expired) {
       try { await bucket.delete(f._id); deleted++; } catch (e: any) {
-        // Chunks may already be gone (partial earlier delete); make sure the file doc is removed too.
         await db.collection(`${BUCKET}.files`).deleteOne({ _id: f._id }).catch(() => {});
       }
     }
@@ -229,29 +338,107 @@ export async function stopFileStore(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Helpers
+// Massive 250+ MIME Database
 // ---------------------------------------------------------------------------------------------
 
 const MIME_BY_EXT: Record<string, string> = {
-  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp',
-  '.bmp': 'image/bmp', '.ico': 'image/x-icon', '.avif': 'image/avif', '.pdf': 'application/pdf',
-  '.zip': 'application/zip', '.tar': 'application/x-tar', '.gz': 'application/gzip', '.tgz': 'application/gzip',
-  '.7z': 'application/x-7z-compressed', '.json': 'application/json', '.txt': 'text/plain', '.md': 'text/markdown',
-  '.csv': 'text/csv', '.tsv': 'text/tab-separated-values', '.log': 'text/plain', '.yaml': 'text/plain', '.yml': 'text/plain',
-  '.ts': 'text/plain', '.tsx': 'text/plain', '.jsx': 'text/plain', '.py': 'text/x-python', '.sh': 'text/plain',
-  '.css': 'text/css', '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.ogg': 'audio/ogg', '.mp4': 'video/mp4', '.webm': 'video/webm',
-  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  // Images (Raster, Vector & RAW)
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.jpe': 'image/jpeg', '.gif': 'image/gif',
+  '.webp': 'image/webp', '.bmp': 'image/bmp', '.ico': 'image/x-icon', '.avif': 'image/avif', '.tiff': 'image/tiff',
+  '.tif': 'image/tiff', '.svg': 'image/svg+xml', '.heic': 'image/heic', '.heif': 'image/heif', '.raw': 'image/x-dcraw',
+  '.cr2': 'image/x-canon-cr2', '.nef': 'image/x-nikon-nef', '.arw': 'image/x-sony-arw', '.dng': 'image/x-adobe-dng',
+  '.psd': 'image/vnd.adobe.photoshop', '.ai': 'application/postscript', '.eps': 'application/postscript',
+  '.cur': 'image/x-icon', '.pnm': 'image/x-portable-anymap', '.pbm': 'image/x-portable-bitmap',
+  '.pgm': 'image/x-portable-graymap', '.ppm': 'image/x-portable-pixmap', '.xbm': 'image/x-xbitmap',
+
+  // Audio Formats
+  '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.ogg': 'audio/ogg', '.oga': 'audio/ogg', '.m4a': 'audio/mp4',
+  '.flac': 'audio/flac', '.aac': 'audio/aac', '.wma': 'audio/x-ms-wma', '.opus': 'audio/opus', '.mid': 'audio/midi',
+  '.midi': 'audio/midi', '.aif': 'audio/x-aiff', '.aiff': 'audio/x-aiff', '.alac': 'audio/alac', '.amr': 'audio/amr',
+
+  // Video Formats
+  '.mp4': 'video/mp4', '.webm': 'video/webm', '.mkv': 'video/x-matroska', '.avi': 'video/x-msvideo',
+  '.mov': 'video/quicktime', '.wmv': 'video/x-ms-wmv', '.flv': 'video/x-flv', '.m4v': 'video/x-m4v',
+  '.3gp': 'video/3gpp', '.3g2': 'video/3gpp2', '.m2ts': 'video/mp2t', '.ogv': 'video/ogg',
+
+  // Documents & Office
+  '.pdf': 'application/pdf', '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.doc': 'application/msword', '.dot': 'application/msword',
   '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+  '.xls': 'application/vnd.ms-excel', '.xlt': 'application/vnd.ms-excel',
+  '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  '.ppt': 'application/vnd.ms-powerpoint', '.pps': 'application/vnd.ms-powerpoint',
+  '.odt': 'application/vnd.oasis.opendocument.text', '.ods': 'application/vnd.oasis.opendocument.spreadsheet',
+  '.odp': 'application/vnd.oasis.opendocument.presentation', '.odg': 'application/vnd.oasis.opendocument.graphics',
+  '.rtf': 'application/rtf', '.epub': 'application/epub+zip', '.mobi': 'application/x-mobipocket-ebook',
+  '.pages': 'application/x-iwork-pages-sffpages', '.numbers': 'application/x-iwork-numbers-sffnumbers',
+  '.key': 'application/x-iwork-keynote-sffkey',
+
+  // Text & Markdown
+  '.txt': 'text/plain', '.md': 'text/markdown', '.markdown': 'text/markdown', '.rst': 'text/x-rst',
+  '.tex': 'application/x-tex', '.log': 'text/plain', '.diff': 'text/x-diff', '.patch': 'text/x-diff',
+  '.csv': 'text/csv', '.tsv': 'text/tab-separated-values',
+
+  // Web & Configuration
+  '.html': 'text/html', '.htm': 'text/html', '.xhtml': 'application/xhtml+xml',
+  '.css': 'text/css', '.scss': 'text/x-scss', '.sass': 'text/x-sass', '.less': 'text/x-less',
+  '.json': 'application/json', '.jsonc': 'application/json', '.jsonld': 'application/ld+json',
+  '.yaml': 'text/yaml', '.yml': 'text/yaml', '.toml': 'application/toml', '.xml': 'application/xml',
+  '.wasm': 'application/wasm', '.graphql': 'application/graphql', '.gql': 'application/graphql',
+
+  // Programming & Source Code
+  '.ts': 'text/typescript', '.tsx': 'text/typescript-jsx', '.js': 'text/javascript', '.jsx': 'text/javascript-jsx',
+  '.mjs': 'text/javascript', '.cjs': 'text/javascript', '.vue': 'text/x-vue', '.svelte': 'text/x-svelte',
+  '.py': 'text/x-python', '.pyw': 'text/x-python', '.rb': 'text/x-ruby', '.php': 'text/x-php',
+  '.java': 'text/x-java-source', '.class': 'application/java-vm', '.jar': 'application/java-archive',
+  '.c': 'text/x-c', '.h': 'text/x-c', '.cpp': 'text/x-c++', '.cc': 'text/x-c++', '.cxx': 'text/x-c++',
+  '.hpp': 'text/x-c++', '.cs': 'text/x-csharp', '.go': 'text/x-go', '.rs': 'text/x-rust',
+  '.swift': 'text/x-swift', '.kt': 'text/x-kotlin', '.kts': 'text/x-kotlin', '.dart': 'text/x-dart',
+  '.lua': 'text/x-lua', '.sh': 'application/x-sh', '.bash': 'application/x-sh', '.zsh': 'application/x-sh',
+  '.fish': 'application/x-fish', '.bat': 'application/x-bat', '.cmd': 'application/x-bat',
+  '.ps1': 'application/x-powershell', '.pl': 'text/x-perl', '.pm': 'text/x-perl', '.r': 'text/x-r',
+  '.scala': 'text/x-scala', '.ex': 'text/x-elixir', '.exs': 'text/x-elixir', '.erl': 'text/x-erlang',
+  '.zig': 'text/x-zig', '.nim': 'text/x-nim', '.sql': 'application/sql',
+
+  // AI, Data Science & Machine Learning Models
+  '.parquet': 'application/vnd.apache.parquet', '.feather': 'application/vnd.apache.arrow.file',
+  '.arrow': 'application/vnd.apache.arrow.file', '.h5': 'application/x-hdf5', '.hdf5': 'application/x-hdf5',
+  '.onnx': 'application/octet-stream', '.pt': 'application/octet-stream', '.pth': 'application/octet-stream',
+  '.safetensors': 'application/octet-stream', '.bin': 'application/octet-stream', '.gguf': 'application/octet-stream',
+  '.joblib': 'application/octet-stream', '.pkl': 'application/octet-stream', '.pickle': 'application/octet-stream',
+  '.npy': 'application/octet-stream', '.npz': 'application/octet-stream',
+
+  // Archives, Packages & Compression
+  '.zip': 'application/zip', '.tar': 'application/x-tar', '.gz': 'application/gzip', '.tgz': 'application/gzip',
+  '.bz2': 'application/x-bzip2', '.tbz2': 'application/x-bzip2', '.xz': 'application/x-xz', '.txz': 'application/x-xz',
+  '.7z': 'application/x-7z-compressed', '.rar': 'application/vnd.rar', '.zst': 'application/zstd',
+  '.iso': 'application/x-iso9660-image', '.dmg': 'application/x-apple-diskimage',
+  '.deb': 'application/vnd.debian.binary-package', '.rpm': 'application/x-rpm',
+  '.apk': 'application/vnd.android.package-archive', '.whl': 'application/x-wheel+zip',
+
+  // Fonts
+  '.woff': 'font/woff', '.woff2': 'font/woff2', '.ttf': 'font/ttf', '.otf': 'font/otf', '.eot': 'application/vnd.ms-fontobject',
+
+  // 3D Assets & CAD
+  '.obj': 'model/obj', '.fbx': 'application/octet-stream', '.gltf': 'model/gltf+json', '.glb': 'model/gltf-binary',
+  '.stl': 'model/stl', '.ply': 'model/ply', '.dae': 'model/vnd.collada+xml', '.blend': 'application/x-blender',
+  '.step': 'application/step', '.stp': 'application/step', '.iges': 'model/iges', '.igs': 'model/iges',
+
+  // Database
+  '.sqlite': 'application/vnd.sqlite3', '.sqlite3': 'application/vnd.sqlite3', '.db': 'application/vnd.sqlite3',
+  '.mdb': 'application/x-msaccess', '.accdb': 'application/x-msaccess'
 };
-// Active content: browsers could execute these if served inline from our origin, so they are always
-// delivered as opaque downloads (the user can still save and open them locally).
+
+// Active content: delivered as attachment with octet-stream header when served over public download HTTP route.
 const ACTIVE_EXTS = new Set(['.html', '.htm', '.xhtml', '.svg', '.xml', '.js', '.mjs', '.cjs', '.swf', '.xsl', '.xslt']);
 
 export function contentTypeFor(name: string): string {
   const ext = path.extname(name).toLowerCase();
-  if (ACTIVE_EXTS.has(ext)) return 'application/octet-stream';
   return MIME_BY_EXT[ext] || 'application/octet-stream';
+}
+
+export function isImageMime(mime: string): boolean {
+  return /^image\/(png|jpe?g|webp|gif|avif|bmp|tiff|x-icon)$/i.test(mime);
 }
 
 export function safeFileName(raw: unknown): string {
@@ -280,13 +467,14 @@ export interface ShareInput {
   sandboxPath?: string;
   dir?: string;
   ttlHours?: number;
+  never?: boolean;
 }
 
 export async function shareFile(
   sessionId: string,
   input: ShareInput,
   baseUrl: string
-): Promise<{ id: string; name: string; sizeBytes: number; contentType: string; downloadUrl: string; expiresAt: string; expiresInHours: number }> {
+): Promise<{ id: string; name: string; sizeBytes: number; contentType: string; downloadUrl: string; expiresAt: string; expiresInHours: number | null; permanent: boolean }> {
   const ownerKey = getAuthKeyForSession(sessionId);
   if (!uploadLimiter.hit(ownerKey)) throw new Error('Upload rate limit reached (20/min). Wait a moment and retry.');
 
@@ -318,11 +506,20 @@ export async function shareFile(
   if (data.length > limit) throw new Error(`File exceeds the ${(limit / 1024 / 1024).toFixed(0)}MB limit.`);
 
   const usage = await store.usage(ownerKey);
-  if (usage.count >= fileConfig.maxFilesPerOwner) throw new Error(`File quota reached (${fileConfig.maxFilesPerOwner} active files). Delete some with sandbox_store action:delete.`);
-  if (usage.bytes + data.length > fileConfig.maxBytesPerOwner) throw new Error('Storage quota reached. Delete some files with sandbox_store action:delete.');
+  const maxMb = (fileConfig.maxBytesPerOwner / 1024 / 1024).toFixed(0);
+  const currentMb = (usage.bytes / 1024 / 1024).toFixed(1);
+  const fileMb = (data.length / 1024 / 1024).toFixed(1);
 
-  const ttl = Math.min(Math.max(1, Math.floor(input.ttlHours ?? fileConfig.ttlHours)), fileConfig.ttlHours);
-  const expiresAt = new Date(Date.now() + ttl * 3600 * 1000);
+  if (usage.count >= fileConfig.maxFilesPerOwner) {
+    throw new Error(`MongoDB storage is full (file count limit reached: ${usage.count}/${fileConfig.maxFilesPerOwner} files). Delete some files using sandbox_store action:delete (use action:list to inspect or pass ids: [...]).`);
+  }
+  if (usage.bytes + data.length > fileConfig.maxBytesPerOwner) {
+    throw new Error(`MongoDB storage is full (byte quota reached: ${currentMb}MB / ${maxMb}MB used). Cannot add ${fileMb}MB file. Delete old/large files with sandbox_store action:delete (use action:list with sortBy: 'size' to find largest files).`);
+  }
+
+  const isNever = input.never === true || input.ttlHours === 0 || input.ttlHours === -1;
+  const ttl = isNever ? 0 : Math.min(Math.max(1, Math.floor(input.ttlHours ?? fileConfig.ttlHours)), 720);
+  const expiresAt = isNever ? null : new Date(Date.now() + ttl * 3600 * 1000);
   const token = crypto.randomBytes(32).toString('base64url');
   const contentType = contentTypeFor(name);
 
@@ -334,8 +531,9 @@ export async function shareFile(
     sizeBytes: data.length,
     contentType,
     downloadUrl: `${base}/files/${token}/${encodeURIComponent(name)}`,
-    expiresAt: expiresAt.toISOString(),
-    expiresInHours: ttl
+    expiresAt: expiresAt ? expiresAt.toISOString() : 'never',
+    expiresInHours: isNever ? null : ttl,
+    permanent: isNever
   };
 }
 
@@ -392,7 +590,12 @@ async function httpGetPinned(urlStr: string, maxBytes: number, deadline: number)
     const req = mod.request(url, {
       method: 'GET',
       timeout: Math.min(timeLeft, 30000),
-      headers: { 'User-Agent': 'krix-sandbox/1.0', 'Accept': '*/*', 'Accept-Encoding': 'identity' },
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept-Encoding': 'identity'
+      },
       lookup: ((_h: string, opts: any, cb: any) => (opts?.all ? cb(null, [{ address: pick.address, family: pick.family }]) : cb(null, pick.address, pick.family))) as any,
       servername: net.isIP(host) ? undefined : host
     } as any, (res) => {
@@ -426,13 +629,46 @@ async function httpGetPinned(urlStr: string, maxBytes: number, deadline: number)
   });
 }
 
-export async function downloadToSandbox(sessionId: string, input: { url: string; filename?: string; dir?: string }) {
+export function extractMediaUrlsFromHtml(html: string, baseUrl: string): { images: string[]; media: string[]; links: string[] } {
+  const images = new Set<string>();
+  const media = new Set<string>();
+  const links = new Set<string>();
+
+  const imgRegex = /<img[^>]+src=["']([^"']+)["']/gi;
+  let match;
+  while ((match = imgRegex.exec(html)) !== null) {
+    try { images.add(new URL(match[1], baseUrl).toString()); } catch {}
+  }
+
+  const mediaRegex = /<(?:video|audio|source)[^>]+src=["']([^"']+)["']/gi;
+  while ((match = mediaRegex.exec(html)) !== null) {
+    try { media.add(new URL(match[1], baseUrl).toString()); } catch {}
+  }
+
+  const linkRegex = /<a[^>]+href=["']([^"']+)["']/gi;
+  while ((match = linkRegex.exec(html)) !== null) {
+    try {
+      const u = new URL(match[1], baseUrl).toString();
+      if (/\.(pdf|zip|tar|gz|7z|csv|tsv|json|docx?|xlsx?|pptx?|mp4|mp3|wav|png|jpe?g|webp|svg)$/i.test(u)) {
+        links.add(u);
+      }
+    } catch {}
+  }
+
+  return {
+    images: Array.from(images).slice(0, 50),
+    media: Array.from(media).slice(0, 30),
+    links: Array.from(links).slice(0, 50)
+  };
+}
+
+export async function downloadToSandbox(sessionId: string, input: { url: string; filename?: string; dir?: string; extractMedia?: boolean }) {
   assertSandboxAllowed();
   const maxBytes = downloadMaxBytes();
   const deadline = Date.now() + 90_000;
   let current = input.url;
   let fetched: Fetched | undefined;
-  for (let hop = 0; hop <= 5; hop++) {
+  for (let hop = 0; hop <= 8; hop++) {
     const r = await httpGetPinned(current, maxBytes, deadline);
     if (r.redirect) { current = r.redirect; continue; }
     fetched = r.res;
@@ -441,26 +677,38 @@ export async function downloadToSandbox(sessionId: string, input: { url: string;
   if (!fetched) throw new Error('Too many redirects.');
   if (fetched.body.length === 0) throw new Error('The server returned an empty file.');
 
+  const contentTypeRaw = fetched.contentType.split(';')[0].trim().toLowerCase() || 'application/octet-stream';
   const urlName = decodeURIComponentSafe(path.basename(new URL(fetched.finalUrl).pathname));
   const name = safeFileName(input.filename || fetched.suggestedName || urlName || 'download');
   const { root, abs } = await resolveSandboxFile(sessionId, name, input.dir);
   await sbxMkdirp(root, path.dirname(abs));
   await sbxWriteText(root, abs, fetched.body, false);
-  return {
+
+  const out: Record<string, any> = {
     path: path.relative(root, abs),
     absolutePath: abs,
     name,
     sizeBytes: fetched.body.length,
-    contentType: fetched.contentType.split(';')[0] || 'unknown',
+    contentType: contentTypeRaw,
     sha256: crypto.createHash('sha256').update(fetched.body).digest('hex'),
-    note: 'Saved in the sandbox. Use sandbox_exec/sandbox_run to process it, or sandbox_store action:share to hand it to the user.'
+    note: 'Saved in the sandbox. Use sandbox_exec/sandbox_run to process it, sandbox_store action:view to view it, or sandbox_store action:share to hand it to the user.'
   };
+
+  if (input.extractMedia || contentTypeRaw.includes('text/html')) {
+    const htmlText = fetched.body.toString('utf-8');
+    const extracted = extractMediaUrlsFromHtml(htmlText, fetched.finalUrl);
+    if (extracted.images.length || extracted.media.length || extracted.links.length) {
+      out.extractedUrls = extracted;
+    }
+  }
+
+  return { result: out, data: fetched.body, contentType: contentTypeRaw };
 }
 
 function decodeURIComponentSafe(s: string): string { try { return decodeURIComponent(s); } catch { return s; } }
 
 // ---------------------------------------------------------------------------------------------
-// MCP tool: sandbox_store (share / list / delete / download)
+// MCP tool: sandbox_store (share / list / delete / download / view)
 // ---------------------------------------------------------------------------------------------
 
 export function registerFileTools(server: any, sessionId: string, registry: Record<string, any>, getBaseUrl: () => string) {
@@ -468,23 +716,36 @@ export function registerFileTools(server: any, sessionId: string, registry: Reco
 
   reg('sandbox_store', {
     description:
-      'Move files between the sandbox, the internet and the user. Actions:\n' +
-      '- share: upload a sandbox file (sandboxPath) or small inline content (content/content_b64 + filename) to MongoDB and get a private downloadUrl — GIVE THAT URL TO THE USER. Files auto-delete after at most 48h (ttlHours can only shorten).\n' +
-      '- list: list your active shared files (id, name, size, expiry; links are only shown at share time).\n' +
-      '- delete: delete a shared file by id (or all:true), which also kills its link.\n' +
-      '- download: fetch a file from an http(s) URL into the sandbox (url, optional filename/dir). Private/internal addresses are refused.\n' +
-      'Typical flow: download or create a file -> process it with sandbox_run / sandbox_exec (convert images, zip/unzip, generate code) -> share it.',
+      'Move, view, and manage files between the sandbox, MongoDB cloud store, the internet, and the user.\n' +
+      'Actions:\n' +
+      '- share: upload a sandbox file (sandboxPath) or inline content (content/content_b64) to MongoDB and get a private download link for the user. Expiry defaults to 72 hours (or set `never: true` / `ttlHours: 0` for permanent retention).\n' +
+      '- list: search, filter, and inspect your shared files with quota stats. Filter by `search` (name substring/regex), `status` (active/expired/permanent/all), and `sortBy` (size/createdAt/expiresAt/name).\n' +
+      '- delete: delete a file by `id`, batch delete multiple with `ids: [...]`, delete all expired with `expiredOnly: true`, or delete all with `all: true`.\n' +
+      '- download: download any file/image from across the internet into the sandbox. Supports `view: true` to display images inline, and `extractMedia: true` to discover downloadable image/media links from webpages.\n' +
+      '- view: inspect a file from the sandbox or store directly. Automatically returns native MCP image blocks for images (so they display inline in chat) and clean text for documents/code.',
     inputSchema: {
-      action: z.enum(['share', 'list', 'delete', 'download']),
-      sandboxPath: z.string().max(1024).optional().describe('share: path of a regular file in the sandbox (relative to the sandbox working dir, or to `dir`).'),
-      dir: z.string().max(1024).optional().describe('share/download: sandbox directory that paths are relative to / the file is saved in.'),
-      filename: z.string().max(255).optional().describe('share: download name (required for inline content). download: name to save as.'),
-      content: z.string().optional().describe('share: inline UTF-8 text (small files).'),
-      content_b64: z.string().optional().describe('share: inline base64 (small binary files).'),
-      ttlHours: z.number().int().min(1).max(48).optional().describe('share: hours until auto-deletion (default and maximum 48).'),
-      id: z.string().regex(/^[a-fA-F0-9]{24}$/, 'id must be a 24-character hex file id').optional().describe('delete: id of the shared file.'),
-      all: z.boolean().optional().describe('delete: delete every file you shared.'),
-      url: z.string().url().max(2048).optional().describe('download: http(s) URL to fetch.')
+      action: z.enum(['share', 'list', 'delete', 'download', 'view']),
+      sandboxPath: z.string().max(1024).optional().describe('share/view: path of a file inside the sandbox.'),
+      dir: z.string().max(1024).optional().describe('share/download/view: sandbox base directory.'),
+      filename: z.string().max(255).optional().describe('share/download: file name.'),
+      content: z.string().optional().describe('share: inline UTF-8 text.'),
+      content_b64: z.string().optional().describe('share: inline base64 data.'),
+      ttlHours: z.number().int().min(0).max(720).optional().describe('share: hours until auto-deletion (default 72, 0 for never).'),
+      never: z.boolean().optional().describe('share: store permanently without auto-deletion.'),
+      url: z.string().url().max(2048).optional().describe('download: HTTP/HTTPS URL from any website or API to fetch into sandbox.'),
+      extractMedia: z.boolean().optional().describe('download: if URL is an HTML page, extract all image, video, and download links found on the page.'),
+      view: z.boolean().optional().describe('download/share: if true and the file is an image, renders the image block directly in the tool response.'),
+      search: z.string().optional().describe('list/delete: regex or substring filter for filenames.'),
+      status: z.enum(['active', 'expired', 'permanent', 'all']).optional().default('active').describe('list: file expiration filter.'),
+      sortBy: z.enum(['size', 'createdAt', 'expiresAt', 'name']).optional().default('createdAt').describe('list: sort field.'),
+      sortOrder: z.enum(['asc', 'desc']).optional().default('desc').describe('list: sort order direction.'),
+      limit: z.number().int().min(1).max(100).optional().default(20).describe('list: pagination limit.'),
+      offset: z.number().int().min(0).optional().default(0).describe('list: pagination offset.'),
+      compact: z.boolean().optional().default(true).describe('list: return token-efficient compact summary.'),
+      id: z.string().regex(/^[a-fA-F0-9]{24}$/, 'id must be a 24-character hex file id').optional().describe('delete/view: ID of the stored file.'),
+      ids: z.array(z.string().regex(/^[a-fA-F0-9]{24}$/)).optional().describe('delete: batch list of file IDs to delete.'),
+      expiredOnly: z.boolean().optional().describe('delete: delete all expired files owned by user.'),
+      all: z.boolean().optional().describe('delete: delete every file you shared.')
     },
     annotations: getToolAnnotations('sandbox_store')
   }, async (args: any) => {
@@ -493,24 +754,138 @@ export function registerFileTools(server: any, sessionId: string, registry: Reco
       switch (args.action) {
         case 'share': {
           const out = await shareFile(sessionId, args, getBaseUrl());
-          return formatOptimizedResponse({ ...out, note: 'Give downloadUrl to the user. It is private to whoever has the link and expires automatically.' }, 4000);
+          if (args.view && isImageMime(out.contentType) && args.sandboxPath) {
+            const { root, abs } = await resolveSandboxFile(sessionId, args.sandboxPath, args.dir);
+            const imgData = await sbxReadBytes(root, abs, fileConfig.maxFileBytes);
+            return formatImageResponse(imgData, out.contentType, { ...out, note: 'Give downloadUrl to the user for external sharing.' });
+          }
+          return formatOptimizedResponse({ ...out, note: 'Give downloadUrl to the user. It is private to whoever has the link.' }, 4000);
         }
+
         case 'list': {
-          const files = await getFileStore().listByOwner(ownerKey);
+          const options: ListOwnerOptions = {
+            search: args.search,
+            status: args.status,
+            sortBy: args.sortBy,
+            sortOrder: args.sortOrder,
+            limit: args.limit,
+            offset: args.offset
+          };
+          const [result, usage] = await Promise.all([
+            getFileStore().listByOwner(ownerKey, options),
+            getFileStore().usage(ownerKey)
+          ]);
+          const maxMb = (fileConfig.maxBytesPerOwner / 1024 / 1024).toFixed(0);
+          const usedMb = (usage.bytes / 1024 / 1024).toFixed(2);
+          const percentUsed = Math.round((usage.bytes / fileConfig.maxBytesPerOwner) * 100);
+          const quota = {
+            usedFiles: usage.count,
+            maxFiles: fileConfig.maxFilesPerOwner,
+            usedMb: `${usedMb} MB`,
+            maxMb: `${maxMb} MB`,
+            percentUsed: `${percentUsed}%`,
+            permanentFiles: usage.permanentCount,
+            expiredFiles: usage.expiredCount
+          };
+
+          if (args.compact !== false) {
+            return formatOptimizedResponse({
+              total: result.totalCount,
+              count: result.files.length,
+              quota,
+              files: result.files.map((f) => ({
+                id: f.id,
+                name: f.name,
+                size: f.size > 1048576 ? `${(f.size / 1048576).toFixed(1)}MB` : `${Math.round(f.size / 1024)}KB`,
+                type: f.contentType,
+                expires: f.expiresAt ? f.expiresAt.toISOString().slice(0, 16).replace('T', ' ') : 'never'
+              }))
+            }, 6000);
+          }
+
           return formatOptimizedResponse({
-            count: files.length,
-            files: files.map((f) => ({ id: f.id, name: f.name, sizeBytes: f.size, createdAt: f.createdAt, expiresAt: f.expiresAt }))
+            total: result.totalCount,
+            count: result.files.length,
+            quota,
+            files: result.files
           }, 8000);
         }
+
         case 'delete': {
-          if ((args.id ? 1 : 0) + (args.all ? 1 : 0) !== 1) throw new Error('delete needs exactly one of: id, all:true.');
-          if (args.all) return formatOptimizedResponse({ deleted: await getFileStore().deleteAllOwned(ownerKey) });
-          if (!(await getFileStore().deleteOwned(ownerKey, args.id))) throw new Error('No such file (it may have expired, been deleted, or belong to someone else).');
+          const targets = (args.id ? 1 : 0) + (args.ids ? 1 : 0) + (args.all ? 1 : 0) + (args.expiredOnly ? 1 : 0) + (args.search ? 1 : 0);
+          if (targets === 0) throw new Error('delete needs at least one of: id, ids: [...], all: true, expiredOnly: true, or search: "pattern".');
+
+          if (args.all) {
+            return formatOptimizedResponse({ deleted: await getFileStore().deleteAllOwned(ownerKey) });
+          }
+          if (args.ids && Array.isArray(args.ids)) {
+            const count = await getFileStore().deleteManyOwned(ownerKey, args.ids);
+            return formatOptimizedResponse({ deleted: count, targetIds: args.ids.length });
+          }
+          if (args.expiredOnly || args.search) {
+            const count = await getFileStore().deleteFilteredOwned(ownerKey, { expiredOnly: args.expiredOnly, search: args.search });
+            return formatOptimizedResponse({ deleted: count, filter: { expiredOnly: !!args.expiredOnly, search: args.search } });
+          }
+          if (!(await getFileStore().deleteOwned(ownerKey, args.id))) {
+            throw new Error('No such file (it may have expired, been deleted, or belong to someone else).');
+          }
           return formatOptimizedResponse({ deleted: 1, id: args.id });
         }
+
         case 'download': {
           if (!args.url) throw new Error('download needs a url.');
-          return formatOptimizedResponse(await downloadToSandbox(sessionId, args), 4000);
+          const dl = await downloadToSandbox(sessionId, args);
+          if (args.view && isImageMime(dl.contentType)) {
+            return formatImageResponse(dl.data, dl.contentType, dl.result);
+          }
+          return formatOptimizedResponse(dl.result, 5000);
+        }
+
+        case 'view': {
+          let buffer: Buffer;
+          let filename: string;
+          let mime: string;
+
+          if (args.sandboxPath) {
+            assertSandboxAllowed();
+            const { root, abs } = await resolveSandboxFile(sessionId, args.sandboxPath, args.dir);
+            const st = await sbxStat(root, abs);
+            if (st.kind === 'missing') throw new Error(`File not found in sandbox: ${args.sandboxPath}`);
+            filename = path.basename(abs);
+            mime = contentTypeFor(filename);
+            buffer = await sbxReadBytes(root, abs, fileConfig.maxFileBytes);
+          } else if (args.id) {
+            const fileDoc = await getFileStore().openById(ownerKey, args.id);
+            if (!fileDoc) throw new Error(`Stored file not found or expired: ${args.id}`);
+            filename = fileDoc.name;
+            mime = fileDoc.contentType;
+            const chunks: Buffer[] = [];
+            for await (const chunk of fileDoc.stream) chunks.push(Buffer.from(chunk));
+            buffer = Buffer.concat(chunks);
+          } else {
+            throw new Error('view requires either sandboxPath or id.');
+          }
+
+          if (isImageMime(mime)) {
+            return formatImageResponse(buffer, mime, { name: filename, sizeBytes: buffer.length, format: 'image' });
+          }
+
+          if (mime.startsWith('text/') || mime === 'application/json' || mime === 'application/xml') {
+            return formatOptimizedResponse({
+              name: filename,
+              sizeBytes: buffer.length,
+              contentType: mime,
+              content: buffer.toString('utf-8')
+            }, 8000);
+          }
+
+          return formatOptimizedResponse({
+            name: filename,
+            sizeBytes: buffer.length,
+            contentType: mime,
+            base64Sample: buffer.toString('base64').slice(0, 2000),
+            note: 'Binary file. Use action: share to generate a download link for the user.'
+          }, 3000);
         }
       }
       throw new Error('Unknown action.');
@@ -529,7 +904,6 @@ function contentDisposition(name: string): string {
 
 export function registerFileRoutes(app: Express): void {
   const limiter = createLimiter({ windowMs: 60_000, max: 60 });
-  // Strict limiter for *misses*, so token guessing is throttled hard.
   const missLimiter = createLimiter({ windowMs: 10 * 60_000, max: 30 });
 
   app.get('/files/:token{/:name}', rateLimitMiddleware(limiter, 'Too many download requests.'), async (req: Request, res: Response) => {
@@ -545,8 +919,12 @@ export function registerFileRoutes(app: Express): void {
       const file = await getFileStore().openByTokenHash(sha256Hex(token));
       if (!file) { notFound(); return; }
 
+      const rawExt = path.extname(file.name).toLowerCase();
+      const isDangerous = ACTIVE_EXTS.has(rawExt);
+      const effectiveType = isDangerous ? 'application/octet-stream' : contentTypeFor(file.name);
+
       res.status(200);
-      res.setHeader('Content-Type', contentTypeFor(file.name));
+      res.setHeader('Content-Type', effectiveType);
       res.setHeader('Content-Length', String(file.size));
       res.setHeader('Content-Disposition', contentDisposition(file.name));
       res.setHeader('X-Content-Type-Options', 'nosniff');

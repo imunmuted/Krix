@@ -413,6 +413,16 @@ export function formatOptimizedResponse(data: any, maxChars?: number) {
   return { content: [{ type: 'text' as const, text }] };
 }
 
+export function formatImageResponse(data: Buffer | string, mimeType: string, meta?: any) {
+  const b64 = Buffer.isBuffer(data) ? data.toString('base64') : data;
+  const blocks: any[] = [{ type: 'image' as const, data: b64, mimeType }];
+  if (meta !== undefined) {
+    const text = typeof meta === 'string' ? meta : JSON.stringify(compressResponseData(meta, 3000));
+    blocks.unshift({ type: 'text' as const, text: sanitizeOutput(text) });
+  }
+  return { content: blocks };
+}
+
 export function formatError(error: any) {
   const message = error?.message || String(error);
   return {

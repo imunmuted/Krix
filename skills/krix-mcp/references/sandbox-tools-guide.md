@@ -222,62 +222,99 @@ Cleans the sandbox state by wiping temporary scratch files, terminating persiste
 ## 9. `sandbox_store`
 
 ### Purpose & Overview
-Moves files between the sandbox, the web, and the user. Acts as the file sharing and artifact delivery gateway:
-- **`share`**: Uploads a file from the sandbox (or small inline content) to **MongoDB GridFS** and produces an expiring, private download link to hand to the user.
-- **`list`**: Lists all active shared files, file sizes, and expiration timestamps.
-- **`delete`**: Deletes a shared file link immediately by ID (or `all: true`).
-- **`download`**: Downloads a file from an external HTTP/HTTPS URL into the sandbox filesystem.
+Unified storage, media viewing, and internet asset gateway:
+- **`share`**: Uploads a sandbox file or inline content to **MongoDB GridFS** and produces a secure, private download link. Auto-expiry defaults to **72 hours** (`FILE_TTL_HOURS`), configurable up to 720 hours or set to **`never: true`** (permanent retention).
+- **`list`**: Token-efficient search, filtering, and sorting of shared files with MongoDB quota telemetry (`usedMb`, `percentUsed`, `permanentFiles`, `expiredFiles`).
+- **`delete`**: Removes files from MongoDB GridFS immediately. Supports single file `id`, batch deletion via `ids: [...]`, expired-only cleanup (`expiredOnly: true`), or name search pruning (`search: "..."`).
+- **`download`**: Downloads any file, image, dataset, or package from across the internet into the sandbox using realistic browser headers. Supports `extractMedia: true` to discover downloadable links from webpages, and `view: true` to render downloaded images inline.
+- **`view`**: Directly inspects files in the sandbox or MongoDB store. Returns native **MCP image content blocks** (`type: "image"`, base64) to display images directly inside the chat UI, or clean text for code and documents.
 
-### Expiration & Quotas
-- Shared files automatically expire and are purged after at most **48 hours** (`FILE_TTL_HOURS`).
-- Upload limit: 25 MB per file (`FILE_MAX_MB`). Inline content up to 10 MB.
-- Download limit: 50 MB (`DOWNLOAD_MAX_MB`).
+### Storage Quotas & Expiration Management
+- Default expiry: **72 hours** (`FILE_TTL_HOURS=72`).
+- Permanent files: Set `never: true` or `ttlHours: 0` to prevent automatic expiration.
+- Quota enforcement: Bound by per-owner storage byte limits (`FILE_MAX_TOTAL_MB_PER_OWNER`, default 200MB) and file counts (`FILE_MAX_PER_OWNER`, default 50).
+- If MongoDB storage is full: Use `action: "list", sortBy: "size"` to identify largest files, or `action: "delete", expiredOnly: true` / `ids: [...]` to free space immediately.
 
 ### Schema & Parameters
-- `action` (enum, required): `share` | `list` | `delete` | `download`.
-- `sandboxPath` (string, optional): Path of a file in the sandbox to share.
-- `dir` (string, optional): Directory relative to which paths are resolved.
-- `filename` (string, optional): Download file name (required for inline content; target save name for download).
-- `content` (string, optional): Inline UTF-8 text to share as a file.
-- `content_b64` (string, optional): Inline Base64 content to share as a binary file.
-- `ttlHours` (number, optional, min: 1, max: 48): Hours until link expiration (default: 48).
-- `id` (string, optional): 24-character hex ID of the shared file to delete.
-- `all` (boolean, optional): Set to `true` to delete all files shared by the user.
-- `url` (string, optional): External HTTP/HTTPS URL to fetch into the sandbox.
+- `action` (enum, required): `share` | `list` | `delete` | `download` | `view`.
+- `sandboxPath` (string, optional): Path of a file inside the sandbox (`share`/`view`).
+- `dir` (string, optional): Sandbox base directory.
+- `filename` (string, optional): File name for downloads or inline shares.
+- `content` (string, optional): Inline UTF-8 text.
+- `content_b64` (string, optional): Inline Base64 binary content.
+- `ttlHours` (number, optional, min: 0, max: 720): Expiration hours (default 72; 0 for permanent).
+- `never` (boolean, optional): Store permanently (never auto-deleted).
+- `url` (string, optional): Web URL to download into sandbox.
+- `extractMedia` (boolean, optional): When downloading a webpage, extracts and returns all image and media URLs.
+- `view` (boolean, optional): When true and the file is an image, renders the image directly as an MCP content block.
+- `search` (string, optional): Filter files by name substring or regex (`list`/`delete`).
+- `status` (enum, optional, default: `active`): `active` | `expired` | `permanent` | `all` (`list`).
+- `sortBy` (enum, optional, default: `createdAt`): `size` | `createdAt` | `expiresAt` | `name` (`list`).
+- `sortOrder` (enum, optional, default: `desc`): `asc` | `desc` (`list`).
+- `limit` (number, optional, default: 20): Results per page (`list`).
+- `offset` (number, optional, default: 0): Results offset (`list`).
+- `compact` (boolean, optional, default: true): Returns token-efficient lean summary (`list`).
+- `id` (string, optional): 24-character hex ID of the file (`delete`/`view`).
+- `ids` (array of strings, optional): Batch list of file IDs to delete (`delete`).
+- `expiredOnly` (boolean, optional): Delete all expired files owned by the user (`delete`).
+- `all` (boolean, optional): Delete all files owned by the user (`delete`).
 
 ### Usage Examples
 
-#### Sharing a Sandbox File with the User
+#### 1. Sharing with 72h Default or Permanent Retain
 ```json
 {
   "action": "share",
-  "sandboxPath": "reports/summary.pdf",
-  "ttlHours": 24
+  "sandboxPath": "build/app-release.apk",
+  "never": true
 }
 ```
-*Response returns `downloadUrl` — present this link to the user.*
 
-#### Downloading a Remote Asset into the Sandbox
+#### 2. Downloading Images & Web Assets with Direct Viewing
 ```json
 {
   "action": "download",
-  "url": "https://example.com/data.csv",
-  "filename": "raw_data.csv"
+  "url": "https://images.unsplash.com/photo-1579783902614-a3fb3927b675",
+  "filename": "art.jpg",
+  "view": true
 }
 ```
+*Downloads image into sandbox AND renders it inline in chat via native MCP image blocks.*
 
-#### Listing Active Shared Files
+#### 3. Extracting Media Links from a Webpage
 ```json
 {
-  "action": "list"
+  "action": "download",
+  "url": "https://example.com/gallery",
+  "extractMedia": true
+}
+```
+*Returns all discovered image, video, and downloadable asset URLs found on the page.*
+
+#### 4. Token-Efficient Search & Sorting by Size
+```json
+{
+  "action": "list",
+  "search": "model",
+  "sortBy": "size",
+  "sortOrder": "desc",
+  "compact": true
 }
 ```
 
-#### Deleting a Shared File Link
+#### 5. Batch Pruning and Cleaning Expired Files
 ```json
 {
   "action": "delete",
-  "id": "670c123456789abcdef01234"
+  "expiredOnly": true
+}
+```
+
+#### 6. Viewing an Existing Sandbox or Stored Image
+```json
+{
+  "action": "view",
+  "sandboxPath": "charts/performance.png"
 }
 ```
 

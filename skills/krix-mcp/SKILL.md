@@ -37,7 +37,7 @@ MANDATORY DIRECTIVE: Activate and follow this skill automatically whenever the u
 To prevent any confusion between similarly named tools:
 
 - **`sandbox_file`** (**Local Filesystem Operations**): Performs safe, binary-proof file operations (`read`, `write`, `append`, `edit`, `delete`) on files inside the local sandbox container. Use this to read or modify source files in the sandbox workspace without risking shell escaping or quoting bugs.
-- **`sandbox_store`** (**Cloud File Sharing & Web Downloads**): Moves files between the sandbox, the web, and the user via actions `share`, `list`, `delete`, and `download`. Use `share` to upload files to MongoDB GridFS and get a private 48-hour expiring download URL to hand to the user, and `download` to fetch external files from HTTP/HTTPS URLs into the sandbox.
+- **`sandbox_store`** (**Cloud File Sharing, Media Viewing & Web Downloads**): Moves files between the sandbox, MongoDB cloud store, the internet, and the user via actions `share`, `list`, `delete`, `download`, and `view`. Auto-expiry defaults to 72 hours (or permanent retention via `never: true` / `ttlHours: 0`). Supports direct MCP inline image viewing (`action: "view"` or `view: true`), token-efficient search/sorting by size, batch deletion, and webpage media extraction.
 
 ---
 
@@ -72,7 +72,7 @@ Manage full cloud lifecycle on Render:
 ### 3. Execution Sandbox, Local Git & Sandbox Store (15 Tools)
 Containerized execution environment with persistent shells, 11 runtimes, local Git CLI, and artifact sharing:
 - **Execution & Process Management**: `sandbox_status`, `sandbox_run`, `sandbox_exec`, `sandbox_install`, `sandbox_ps`, `sandbox_output`, `sandbox_file`, `sandbox_reset`
-- **Sandbox Store (Sharing & Downloads)**: `sandbox_store` (`share`, `list`, `delete`, `download`)
+- **Sandbox Store (Sharing, Downloads & Media Viewing)**: `sandbox_store` (`share`, `list`, `delete`, `download`, `view`)
 - **Local Git Synchronization**: `git_clone`, `git_checkout`, `git_pull`, `git_status`, `git_diff`, `git_commit_push`
 
 ### 4. Extended GitHub MCP Tools (34 Tools)
@@ -98,7 +98,7 @@ Exhaustive documentation, full input/output schemas, and usage examples are orga
 
 3. **Sandbox Tools & Sandbox Store Reference**:
    - File: [`skills/krix-mcp/references/sandbox-tools-guide.md`](references/sandbox-tools-guide.md)
-   - Scope: Complete parameter schemas and examples for all 15 Sandbox tools, persistent bash shell behavior, 11 runtimes, `sandbox_file` vs `sandbox_store`, outbound network capabilities, and local Git CLI tools.
+   - Scope: Complete parameter schemas and examples for all 15 Sandbox tools, persistent bash shell behavior, 11 runtimes, `sandbox_file` vs `sandbox_store`, 72h/never expiry, 250+ MIME types, direct MCP image output, and local Git CLI tools.
 
 4. **Additional GitHub MCP Tools Reference**:
    - File: [`skills/krix-mcp/references/github-mcp-tools-guide.md`](references/github-mcp-tools-guide.md)
@@ -115,3 +115,5 @@ Exhaustive documentation, full input/output schemas, and usage examples are orga
 5. **Accurate Network Understanding**: The sandbox **has outbound internet connectivity**. It can install packages from official registries (`npm`, `pip`), fetch remote assets with `sandbox_store` (`action: "download"`), and clone remote repositories. Outbound requests are protected by server-side security checks that block private/internal IP access.
 6. **Use GitHub MCP**: For all standard GitHub issue triage, PR review discussions, line-level review comments, release queries, and repository administration, use the GitHub MCP tools documented in [`github-mcp-tools-guide.md`](references/github-mcp-tools-guide.md).
 7. **Artifact Delivery**: When generating code, reports, images, or zip archives inside the sandbox that the user needs, use `sandbox_store` (`action: "share"`, `sandboxPath: "..."`) and **always provide the resulting download URL directly to the user in your response**.
+8. **Direct Visual & Image Output**: If the user asks to see an image or visual output, use `sandbox_store` (`action: "view"`, `sandboxPath: "..."` or pass `view: true` on `download`). This returns native MCP image content blocks displayed inline in compatible chat clients.
+9. **Universal Internet Downloading & Quota Management**: The agent can download any asset from across the internet via `sandbox_store(action: "download", url: "...")`. To discover media on a webpage, pass `extractMedia: true`. If MongoDB storage becomes full, inspect largest files using `action: "list", sortBy: "size"` and prune expired or unneeded files using `action: "delete", ids: [...]` or `expiredOnly: true`.

@@ -26,15 +26,16 @@ ENABLE_FILE_SHARING=false       # Turn the file-sharing tools off
 - **Safe Environment**: Automatically pins `HOME` to `/tmp/krix_home/` with pre-created cache directories, preventing `npm` and `pip` `ENOENT` failures in containerized environments.
 - **Context-Aware Reset (`sandbox_reset`)**: Wipes scratch files, persistent shells, and background processes while safely preserving active Git context (`owner`, `repo`, `branch`).
 
-### 2a. Sandbox Store: `sandbox_store` (share / list / delete / download)
-One tool moves files between the sandbox, the internet and you:
+### 2a. Sandbox Store: `sandbox_store` (share / list / delete / download / view)
+One unified tool moves files between the sandbox, MongoDB cloud storage, the internet, and the user:
 
-- `download` — fetch a file from an http(s) URL into the sandbox (private/internal addresses are refused, redirects are re-checked, DNS is pinned, size-capped by `DOWNLOAD_MAX_MB`). Plain `curl`/`wget` also work in the shell.
-- `share` — upload a sandbox file (or small inline content) to **MongoDB GridFS** and get a private `downloadUrl` to hand to the user.
-- `list` — your active shared files (id, name, size, expiry).
-- `delete` — delete a shared file by `id` (or `all: true`), killing its link.
+- `download` — fetch any file, image, or dataset from anywhere on the internet into the sandbox (with browser headers, redirect safety, and DNS pinning). Supports `view: true` to display images inline, and `extractMedia: true` to discover downloadable image/media links from webpages.
+- `share` — upload a sandbox file (or inline content) to **MongoDB GridFS** and get a private `downloadUrl` for the user. Auto-expiry defaults to **72 hours** (`FILE_TTL_HOURS`), configurable up to 720 hours or `never: true` for permanent retention.
+- `list` — token-efficient search and listing with MongoDB quota reports (`usedMb`, `percentUsed`). Filter by `search` (name substring/regex), `status` (`active`, `expired`, `permanent`, `all`), and `sortBy` (`size`, `createdAt`, `expiresAt`, `name`).
+- `delete` — delete by `id`, batch delete multiple files with `ids: [...]`, delete all expired with `expiredOnly: true`, or delete all with `all: true`.
+- `view` — directly inspect images or files from the sandbox or store. Returns native **MCP image content blocks** (`type: "image"`, base64) to render images inline in the chat interface.
 
-Every shared file is **auto-deleted after 48 hours** (`FILE_TTL_HOURS`, 1–48). Links are 256-bit random tokens (only the hash is stored), always served as attachments with `nosniff` + a sandboxing CSP, and HTML/SVG/JS never render. Setup: set `MONGODB_URI` (see `.env.example`). Downloads use TCP only — no ICMP/ping access is needed.
+Shared links are 256-bit random tokens, always served with `nosniff` and sandboxing CSP. Supports 250+ file types spanning images, audio, video, documents, AI models, archives, and code. Setup: set `MONGODB_URI` (see `.env.example`).
 
 ### 3. Surgical Code Editing & Structural Search
 - **`str_replace_editor`**: Performs exact string block replacement. On match failure, it calculates **Levenshtein Distance Similarity** and returns a line-numbered context hint showing the closest matching code lines with similarity percentages. Supports Base64 (`old_str_b64`, `new_str_b64`).
@@ -104,9 +105,7 @@ Every shared file is **auto-deleted after 48 hours** (`FILE_TTL_HOURS`, 1–48).
 ---
 
 ### Sandbox Store (`files` — Enabled by Default, sharing needs `MONGODB_URI`)
-| Tool Name | Type | Description |
-| :--- | :--- | :--- |
-| `sandbox_store` | `MUTATING` | `action: share \| list \| delete \| download` — share sandbox files via a private 48h link (MongoDB), list/delete your shared files, or download a URL into the sandbox. |
+| `sandbox_store` | `MUTATING` | `action: share \| list \| delete \| download \| view` — cloud file sharing with 72h/never auto-expiry, token-efficient search/sorting by size, batch deletion, universal internet downloading, webpage media extraction, and direct MCP image viewing. |
 
 ---
 

@@ -12,7 +12,7 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 import {
-  SERVER_ICONS, getServerIcons, ICON_48_DATA_URI, ICON_48_BUFFER, ICON_24_BUFFER,
+  SERVER_ICONS, getServerIcons, getServerInfoIcons, ICON_48_DATA_URI, ICON_48_BUFFER, ICON_24_BUFFER,
   GITHUB_ICON_48_URL, GITHUB_ICON_128_URL, GITHUB_LOGO_URL,
   RENDER_PUBLIC_URL, RENDER_ICON_48_URL, RENDER_ICON_128_URL, RENDER_LOGO_URL
 } from './icons.js';
@@ -94,13 +94,14 @@ function loadAsset(fileName: string): Buffer | null {
 function createMasterServer(githubToken: string, renderToken: string | undefined, sessionId: string, req: Request) {
   const base = process.env.PUBLIC_BASE_URL?.replace(/\/+$/, '') || baseUrl(req);
   const serverIcons = getServerIcons(base);
+  const serverInfoIcons = getServerInfoIcons(base);
   const server = new McpServer({
     name: 'krix',
     title: 'Krix',
     version: '1.1.0',
     description: 'Advanced agentic gateway for remote GitHub discovery, Render management, and sandboxed execution.',
     websiteUrl: 'https://github.com/imunmuted/Krix',
-    icons: serverIcons
+    icons: serverInfoIcons
   }, {
     capabilities: {
       tools: {
@@ -115,7 +116,7 @@ function createMasterServer(githubToken: string, renderToken: string | undefined
   (server.server as any)._serverInfo.iconUrl = primaryIconUrl;
   (server.server as any)._serverInfo.logo = primaryLogoUrl;
   (server.server as any)._serverInfo.logoUrl = primaryLogoUrl;
-  (server.server as any)._serverInfo.icons = serverIcons;
+  (server.server as any)._serverInfo.icons = serverInfoIcons;
 
   const octokit = new Octokit({ auth: githubToken || '' });
 

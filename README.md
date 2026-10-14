@@ -1,6 +1,6 @@
 # Krix 
 
-**Krix** is a production-grade Model Context Protocol (MCP) server that empowers AI agents with complete control over **GitHub Repositories**, **Render Cloud Infrastructure**, and an **Isolated Execution Sandbox** with persistent bash shells, language runtimes, and local Git CLI tools over a unified HTTP transport.
+**Krix** (built for a single owner's personal use, not as a public service) is a production-grade Model Context Protocol (MCP) server that empowers AI agents with complete control over **GitHub Repositories**, **Render Cloud Infrastructure**, and an **Isolated Execution Sandbox** with persistent bash shells, language runtimes, and local Git CLI tools over a unified HTTP transport.
 
 Engineered for **LLM token conservation**, **multi-tenant identity isolation**, and **zero-trust security**, Krix combines 80+ tools behind a lazy-loading architecture with payload compression, credential scrubbing, and automated memory cleanup.
 
@@ -8,14 +8,15 @@ Engineered for **LLM token conservation**, **multi-tenant identity isolation**, 
 
 ## 🚀 Key Features & Innovations
 
-### 1. Token-Efficient Lazy Toolset Loading (`load_toolset`)
-To maximize token budget and prevent exceeding model context windows, Krix initializes with a lightweight default suite (**Core + Sandbox Tools**). Additional specialized categories can be dynamically enabled on demand:
+### 1. Token-Efficient Toolset Categories
+To conserve token budget, Krix starts with a lightweight default suite (**Core + Sandbox + File Sharing**). Larger categories are switched on per deployment with environment flags (there is no runtime `load_toolset` tool):
 
-```ts
-load_toolset({ category: "github_issues_prs" }) // Issues, PRs, Reviews, Comments
-load_toolset({ category: "github_admin" })      // Releases, Tags, Collaborators, Copilot
-load_toolset({ category: "render" })            // Render Cloud Services, Deploys, Logs, Postgres
-load_toolset({ category: "all" })               // Enable all categories concurrently
+```bash
+ENABLE_GITHUB_ISSUES_PRS=true   # Issues, PRs, Reviews, Comments
+ENABLE_GITHUB_ADMIN=true        # Releases, Tags, Collaborators, Copilot
+ENABLE_RENDER=true              # Render Cloud Services, Deploys, Logs, Postgres
+ENABLE_ALL_TOOLS=true           # Everything
+ENABLE_FILE_SHARING=false       # Turn the file-sharing tools off
 ```
 
 ### 2. Isolated Multi-Tenant Execution Sandbox
@@ -25,6 +26,16 @@ load_toolset({ category: "all" })               // Enable all categories concurr
 - **Safe Environment**: Automatically pins `HOME` to `/tmp/krix_home/` with pre-created cache directories, preventing `npm` and `pip` `ENOENT` failures in containerized environments.
 - **Context-Aware Reset (`sandbox_reset`)**: Wipes scratch files, persistent shells, and background processes while safely preserving active Git context (`owner`, `repo`, `branch`).
 
+### 2a. Files: `sandbox_files` (share / list / delete / download)
+One tool moves files between the sandbox, the internet and you:
+
+- `download` — fetch a file from an http(s) URL into the sandbox (private/internal addresses are refused, redirects are re-checked, DNS is pinned, size-capped by `DOWNLOAD_MAX_MB`). Plain `curl`/`wget` also work in the shell.
+- `share` — upload a sandbox file (or small inline content) to **MongoDB GridFS** and get a private `downloadUrl` to hand to the user.
+- `list` — your active shared files (id, name, size, expiry).
+- `delete` — delete a shared file by `id` (or `all: true`), killing its link.
+
+Every shared file is **auto-deleted after 48 hours** (`FILE_TTL_HOURS`, 1–48). Links are 256-bit random tokens (only the hash is stored), always served as attachments with `nosniff` + a sandboxing CSP, and HTML/SVG/JS never render. Setup: set `MONGODB_URI` (see `.env.example`). Downloads use TCP only — no ICMP/ping access is needed.
+
 ### 3. Surgical Code Editing & Structural Search
 - **`str_replace_editor`**: Performs exact string block replacement. On match failure, it calculates **Levenshtein Distance Similarity** and returns a line-numbered context hint showing the closest matching code lines with similarity percentages. Supports Base64 (`old_str_b64`, `new_str_b64`).
 - **`patch_contents`**: Enables direct line-range edits (`startLine` to `endLine`) without requiring string matching.
@@ -32,17 +43,19 @@ load_toolset({ category: "all" })               // Enable all categories concurr
 - **`grep`**: High-performance pattern search with regex, file extension filtering (`type: "ts"`), path globs, context lines, and case sensitivity.
 - **`view_file_outline`**: Extracts high-level AST symbol structures (classes, methods, functions, exports).
 
-### 4. Enterprise Security & Memory Hygiene
-- **Zero-Trust Credential Masking**: Automatically redacts GitHub tokens (`ghp_*`, `github_pat_*`), Render keys (`rnd_*`), Bearer [REDACTED], and SSH/RSA private keys from all outputs.
-- **Path Escape Protection**: Enforces path resolution bounds (`sanitizePath`) prohibiting access outside `/tmp` or working directory roots.
-- **Multi-Level Safety Filters**: Configurable via `COMMAND_RESTRICTION_LEVEL` and `NETWORK_RESTRICTION_LEVEL` (`low`, `medium`, `high`, defaulting to `low`):
-  - **Command Levels**: `low` protects against total destruction (`rm -rf /`, `mkfs`, fork bombs); `medium` blocks administrative modifications (`shutdown`, `reboot`, `chmod 777 /`, `/etc/passwd`); `high` blocks privilege escalation (`sudo`, `su`), port listeners (`nc -l`), and kernel tools.
-  - **Network Levels**: `low` blocks internal/private IP targeting (`169.254.169.254`, `127.0.0.1`, private CIDR blocks) for SSRF protection; `medium` blocks raw IP URLs and non-HTTP protocols; `high` restricts outbound traffic to a trusted domain allowlist.
+### 4. Security Model
+- **OS-level sandbox isolation**: sandboxed code, git commands and sandbox file operations run as an unprivileged user (`SANDBOX_UID`/`SANDBOX_GID`; set by the provided `Dockerfile`). The server's secrets (`MCP_API_KEY`, GitHub/Render tokens, `MONGODB_URI`) are removed from every child environment, and the sandbox user cannot read `/proc/<server>/environ` or the server's code. In production the sandbox **fails closed** if isolation is not active (`SANDBOX_REQUIRE_ISOLATION`).
+- **No shell injection**: git, install and run tools use argument vectors (never shell strings); branch / owner / repo / package names are validated; the persistent shell receives commands base64-encoded.
+- **GitHub credentials are scoped**: passed to git only as an in-memory config entry limited to `https://github.com/`, never on a command line or in `.git/config`; remotes are explicit URLs and `url.*.insteadOf` rewrites in a tampered repo config are detected and refused.
+- **Path safety**: `sanitizePath` uses real path-relative checks (no `/tmp` bypass, no prefix confusion), symlink escapes are rejected, and `cwd`/`env` set via `set_active_context` are validated (loader/shell hooks like `LD_PRELOAD`, `BASH_ENV` are blocked).
+- **HTTP hardening**: constant-time API-key comparison, authentication *before* body parsing, failed-auth lockout, global + per-route rate limits, session cap and identity binding, security headers, request/body timeouts, generic error messages, graceful shutdown. The server refuses to start without `MCP_API_KEY`.
+- **Output scrubbing**: configured secrets (exact values), runtime tokens, GitHub/Render/Mongo/Bearer/Basic credentials and private keys are redacted from all tool output and logs.
+- **Honest tool annotations**: only genuinely destructive or code-executing tools carry `destructiveHint`; additive tools (create branch/issue/PR, …) do not. Hints are advisory — all enforcement is server-side.
+- **Guardrails (not a boundary)**: `COMMAND_RESTRICTION_LEVEL` / `NETWORK_RESTRICTION_LEVEL` pattern checks catch accidents and obvious SSRF targets, but string matching cannot stop a determined user. For hard egress control use container/network policy.
 - **ReDoS Defense**: VM-sandboxed regular expression execution (`safeRegexTest`) with a 200ms hard timeout.
-- **Automatic Lifecycle Sweeps**:
-  - **10-min Idle Teardown**: Inactive session transports and sandboxes are automatically destroyed (`destroySandbox`).
-  - **15-min Output Cache TTL**: Truncated shell outputs (`sandbox_output`) are cached per session and automatically purged on expiration or reset.
-  - **10-min Process Table TTL**: Background job entries (`sandbox_ps`) are swept on a 5-minute timer. Buffer output is hard-capped at 200KB per process.
+- **Automatic Lifecycle Sweeps**: 10-min idle session teardown, 15-min output cache TTL, 10-min process table TTL (200KB output cap per process), 48h file expiry.
+
+**Known limits**: all sandbox users share one OS uid, so treat everyone holding the same `MCP_API_KEY` as one trust domain. `?api_key=` URL authentication stays enabled by default for client compatibility — set `ALLOW_QUERY_API_KEY=false` once your client can send headers.
 
 ---
 
@@ -90,8 +103,15 @@ load_toolset({ category: "all" })               // Enable all categories concurr
 
 ---
 
+### Files (`files` — Enabled by Default, sharing needs `MONGODB_URI`)
+| Tool Name | Type | Description |
+| :--- | :--- | :--- |
+| `sandbox_files` | `MUTATING` | `action: share \| list \| delete \| download` — share sandbox files via a private 48h link (MongoDB), list/delete your shared files, or download a URL into the sandbox. |
+
+---
+
 ### GitHub Issues & Pull Requests (`github_issues_prs` — Lazy Loaded)
-Enable via `load_toolset({ category: "github_issues_prs" })`:
+Enable via `ENABLE_GITHUB_ISSUES_PRS=true`:
 
 | Tool Name | Type | Description |
 | :--- | :--- | :--- |
@@ -114,7 +134,7 @@ Enable via `load_toolset({ category: "github_issues_prs" })`:
 ---
 
 ### GitHub Extended & Admin (`github_admin` — Lazy Loaded)
-Enable via `load_toolset({ category: "github_admin" })`:
+Enable via `ENABLE_GITHUB_ADMIN=true`:
 
 | Tool Name | Type | Description |
 | :--- | :--- | :--- |
@@ -141,7 +161,7 @@ Enable via `load_toolset({ category: "github_admin" })`:
 ---
 
 ### Render Cloud API (`render` — Lazy Loaded)
-Enable via `load_toolset({ category: "render" })`:
+Enable via `ENABLE_RENDER=true`:
 
 | Tool Name | Type | Description |
 | :--- | :--- | :--- |
@@ -174,8 +194,14 @@ Enable via `load_toolset({ category: "render" })`:
 Create a `.env` file in the root directory:
 
 ```env
-# Server Authentication Key (Required for client header authorization)
+# Server Authentication Key (REQUIRED - the server will not start without it). openssl rand -hex 32
 MCP_API_KEY=your_mcp_secret_key_here
+
+# File sharing (MongoDB GridFS). Files auto-delete after FILE_TTL_HOURS (1-48, default 48)
+MONGODB_URI=mongodb+srv://user:password@cluster.mongodb.net/?retryWrites=true&w=majority
+MONGODB_DB=krix
+FILE_TTL_HOURS=48
+PUBLIC_BASE_URL=https://your-krix-host.example.com
 
 # Default GitHub Access Token (Fallback if x-github-token header omitted)
 GITHUB_PERSONAL_ACCESS_TOKEN=ghp_your_github_token_here
@@ -301,7 +327,7 @@ AI agents can import this skill to automatically direct and coordinate agentic c
             │ Core + Sandbox Tools│   │ Security Layer │  │ Dynamic Toolset     │
             │ (Enabled by Default)│   │ & Trimmers     │  │ Categories          │
             └─────────────────────┘   └────────────────┘  └─────────────────────┘
-                                                              │ load_toolset()
+                                                              │ ENABLE_* flags
                                         ┌─────────────────────┼─────────────────────┐
                                         ▼                     ▼                     ▼
                                ┌─────────────────┐   ┌─────────────────┐   ┌─────────────────┐

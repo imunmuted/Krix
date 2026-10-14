@@ -367,7 +367,11 @@ export const TOOL_CATEGORY: Record<string, ToolCategory> = {
 };
 
 export function makeRegistrar(server: any, registry: Record<string, any>) {
+  const defaultIcons = server?.server?._serverInfo?.icons || server?.serverInfo?.icons;
   return (name: string, config: any, handler: any) => {
+    if (defaultIcons && defaultIcons.length && !config.icons) {
+      config.icons = defaultIcons;
+    }
     registry[name] = server.registerTool(name, config, handler);
     return registry[name];
   };

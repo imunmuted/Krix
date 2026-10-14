@@ -1,0 +1,28 @@
+{
+  "name": "krix",
+  "title": "Krix",
+  "version": "1.1.0",
+  "description": "Advanced agentic developer gateway for remote GitHub discovery, Render cloud management, sandboxed execution, and persistent storage.",
+  "icon": "https://raw.githubusercontent.com/imunmuted/Krix/gem/assets/icon-128.png",
+  "icons": [
+    {
+      "src": "https://raw.githubusercontent.com/imunmuted/Krix/gem/assets/icon-128.png",
+      "mimeType": "image/png",
+      "sizes": ["128x128"]
+    },
+    {
+      "src": "https://raw.githubusercontent.com/imunmuted/Krix/gem/assets/logo.png",
+      "mimeType": "image/png",
+      "sizes": ["320x317"]
+    }
+  ],
+  "mcpServers": {
+    "krix": {
+      "description": "Advanced agentic developer gateway for remote GitHub discovery, Render cloud management, sandboxed execution, and persistent storage.",
+      "httpUrl": "/mcp",
+      "headers": {
+        "x-api-key": "$MCP_API_KEY"
+      }
+    }
+  }
+}

@@ -2,6 +2,7 @@ import express, { NextFunction, Request, Response } from 'express';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
@@ -64,18 +65,72 @@ function baseUrl(req: Request): string {
   return `${proto}://${host}`;
 }
 
-function serverIcons(req: Request): Array<{ src: string; mimeType: string; sizes: string[] }> {
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Pre-load icon assets into memory for instant base64 Data URI serving
+let icon48DataUri = '';
+let icon128DataUri = '';
+
+function loadAsset(fileName: string): Buffer | null {
+  for (const candidate of [
+    path.resolve(process.cwd(), 'assets', fileName),
+    path.resolve(__dirname, '../assets', fileName),
+    path.resolve(__dirname, 'assets', fileName),
+    path.resolve('assets', fileName)
+  ]) {
+    try {
+      if (fs.existsSync(candidate)) return fs.readFileSync(candidate);
+    } catch {}
+  }
+  return null;
+}
+
+try {
+  const buf48 = loadAsset('icon-48.png') || loadAsset('icon-64.png');
+  if (buf48) icon48DataUri = `data:image/png;base64,${buf48.toString('base64')}`;
+  const buf128 = loadAsset('icon-128.png') || loadAsset('logo.png');
+  if (buf128) icon128DataUri = `data:image/png;base64,${buf128.toString('base64')}`;
+} catch (e) {
+  console.warn('[assets] Error pre-caching icons:', e);
+}
+
+function serverIcons(req: Request): Array<{ src: string; mimeType: string; sizes?: string[]; theme?: 'light' | 'dark' }> {
   const base = process.env.PUBLIC_BASE_URL?.replace(/\/$/, '') || baseUrl(req);
-  const logo = process.env.APP_LOGO_URL?.trim() || `${base}/logo.png`;
-  const mimeType = /\.svg(?:\?.*)?$/i.test(logo) ? 'image/svg+xml' : /\.jpe?g(?:\?.*)?$/i.test(logo) ? 'image/jpeg' : 'image/png';
-  return [{ src: logo, mimeType, sizes: ['320x317'] }];
+  const logoUrl = process.env.APP_LOGO_URL?.trim() || `${base}/logo.png`;
+  const icon128Url = `${base}/icon-128.png`;
+  const icon48Url = `${base}/icon-48.png`;
+
+  const icons: Array<{ src: string; mimeType: string; sizes?: string[]; theme?: 'light' | 'dark' }> = [];
+
+  // 1. Data URIs (matching GitHub MCP Server's octicons.Icons pattern)
+  // Ensures Gemini displays the logo without needing external network fetches.
+  if (icon48DataUri) {
+    icons.push({ src: icon48DataUri, mimeType: 'image/png', sizes: ['48x48'] });
+    icons.push({ src: icon48DataUri, mimeType: 'image/png', sizes: ['48x48'], theme: 'light' });
+    icons.push({ src: icon48DataUri, mimeType: 'image/png', sizes: ['48x48'], theme: 'dark' });
+  }
+  if (icon128DataUri) {
+    icons.push({ src: icon128DataUri, mimeType: 'image/png', sizes: ['128x128'] });
+  }
+
+  // 2. Direct HTTPS URLs for clients that prefer URL references
+  icons.push({ src: icon48Url, mimeType: 'image/png', sizes: ['48x48'] });
+  icons.push({ src: icon128Url, mimeType: 'image/png', sizes: ['128x128'] });
+  icons.push({ src: logoUrl, mimeType: 'image/png', sizes: ['320x317', 'any'] });
+
+  return icons;
 }
 
 function createMasterServer(githubToken: string, renderToken: string | undefined, sessionId: string, req: Request) {
+  const icons = serverIcons(req);
   const server = new McpServer({
     name: 'krix',
-    version: '2.2.0',
-    icons: serverIcons(req)
+    title: 'Krix',
+    version: '1.1.0',
+    description: 'Advanced agentic developer gateway for remote GitHub discovery, Render cloud management, sandboxed execution, and persistent storage.',
+    websiteUrl: 'https://github.com/imunmuted/Krix',
+    icons
   }, {
     capabilities: {
       tools: {
@@ -141,16 +196,7 @@ app.use(rateLimitMiddleware(createLimiter({ windowMs: 60_000, max: Number(proces
 
 app.get('/healthz', (_req, res) => { res.json({ ok: true }); });
 
-app.use('/assets', express.static('assets', { dotfiles: 'deny', index: false, maxAge: '1h' }));
-app.get(['/logo.png', '/logo.jpg', '/favicon.ico'], (_req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
-  const pngPath = path.resolve('assets/logo.png');
-  const jpgPath = path.resolve('assets/logo.jpg');
-  if (fs.existsSync(pngPath)) return res.sendFile(pngPath);
-  if (fs.existsSync(jpgPath)) return res.sendFile(jpgPath);
-  res.status(404).send('Logo not found');
-});
+
 
 registerFileRoutes(app);
 
@@ -261,8 +307,155 @@ app.all('/mcp',
   }
 );
 
+// Static assets and discovery manifests (for Gemini, browser tabs, and MCP discovery)
+app.get(['/logo.png', '/icon-128.png', '/icon-64.png', '/icon-48.png', '/icon-24.png', '/apple-touch-icon.png'], (req, res) => {
+  const reqName = path.basename(req.path);
+  const targetFile = reqName === 'apple-touch-icon.png' ? 'icon-128.png' : reqName;
+  const buf = loadAsset(targetFile) || loadAsset('logo.png');
+  if (buf) {
+    res.setHeader('Content-Type', 'image/png');
+    res.setHeader('Cache-Control', 'public, max-age=86400, immutable');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.send(buf);
+  } else {
+    res.status(404).send('Icon not found');
+  }
+});
+
+app.get(['/logo.jpg', '/logo.jpeg'], (_req, res) => {
+  const buf = loadAsset('logo.jpg');
+  if (buf) {
+    res.setHeader('Content-Type', 'image/jpeg');
+    res.setHeader('Cache-Control', 'public, max-age=86400, immutable');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.send(buf);
+  } else {
+    res.status(404).send('Logo not found');
+  }
+});
+
+app.get('/favicon.ico', (_req, res) => {
+  const buf = loadAsset('favicon.ico') || loadAsset('icon-48.png') || loadAsset('logo.png');
+  if (buf) {
+    res.setHeader('Content-Type', 'image/x-icon');
+    res.setHeader('Cache-Control', 'public, max-age=86400, immutable');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.send(buf);
+  } else {
+    res.status(404).send('Favicon not found');
+  }
+});
+
+app.get(['/manifest.json', '/manifest.webmanifest'], (req, res) => {
+  const base = process.env.PUBLIC_BASE_URL?.replace(/\/$/, '') || baseUrl(req);
+  res.setHeader('Content-Type', 'application/manifest+json');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.json({
+    name: 'Krix',
+    short_name: 'Krix',
+    description: 'Advanced agentic developer gateway for remote GitHub discovery, Render cloud management, sandboxed execution, and persistent storage.',
+    start_url: '/',
+    display: 'standalone',
+    icons: [
+      { src: `${base}/icon-48.png`, sizes: '48x48', type: 'image/png' },
+      { src: `${base}/icon-128.png`, sizes: '128x128', type: 'image/png' },
+      { src: `${base}/logo.png`, sizes: '320x317', type: 'image/png' }
+    ]
+  });
+});
+
+app.get(['/server.json', '/.well-known/mcp.json'], (req, res) => {
+  const base = process.env.PUBLIC_BASE_URL?.replace(/\/$/, '') || baseUrl(req);
+  res.setHeader('Content-Type', 'application/json');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.json({
+    $schema: 'https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json',
+    name: 'io.github.imunmuted/krix',
+    description: 'Advanced agentic developer gateway for remote GitHub discovery, Render cloud management, sandboxed execution, and persistent storage.',
+    title: 'Krix',
+    repository: {
+      url: 'https://github.com/imunmuted/Krix',
+      source: 'github'
+    },
+    version: '1.1.0',
+    icons: [
+      { src: `${base}/icon-48.png`, mimeType: 'image/png', sizes: ['48x48'] },
+      { src: `${base}/icon-128.png`, mimeType: 'image/png', sizes: ['128x128'] },
+      { src: `${base}/logo.png`, mimeType: 'image/png', sizes: ['320x317'] }
+    ],
+    remotes: [
+      {
+        type: 'streamable-http',
+        url: `${base}/mcp`,
+        headers: [
+          {
+            name: 'x-api-key',
+            description: 'Krix Gateway MCP API key',
+            isSecret: true
+          }
+        ]
+      }
+    ]
+  });
+});
+
+app.get('/gemini-extension.json', (req, res) => {
+  const base = process.env.PUBLIC_BASE_URL?.replace(/\/$/, '') || baseUrl(req);
+  res.setHeader('Content-Type', 'application/json');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.json({
+    name: 'krix',
+    title: 'Krix',
+    version: '1.1.0',
+    description: 'Advanced agentic developer gateway for remote GitHub discovery, Render cloud management, sandboxed execution, and persistent storage.',
+    icon: `${base}/icon-128.png`,
+    icons: [
+      { src: `${base}/icon-48.png`, mimeType: 'image/png', sizes: ['48x48'] },
+      { src: `${base}/icon-128.png`, mimeType: 'image/png', sizes: ['128x128'] },
+      { src: `${base}/logo.png`, mimeType: 'image/png', sizes: ['320x317'] }
+    ],
+    mcpServers: {
+      krix: {
+        description: 'Advanced agentic developer gateway for remote GitHub discovery, Render cloud management, sandboxed execution, and persistent storage.',
+        httpUrl: `${base}/mcp`,
+        headers: {
+          'x-api-key': '$MCP_API_KEY'
+        }
+      }
+    }
+  });
+});
+
 app.get('/', (_req, res) => {
-  res.send('⚡ Krix Gateway Active.');
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Krix MCP Gateway</title>
+  <link rel="icon" type="image/x-icon" href="/favicon.ico">
+  <link rel="icon" type="image/png" sizes="48x48" href="/icon-48.png">
+  <link rel="icon" type="image/png" sizes="128x128" href="/icon-128.png">
+  <link rel="apple-touch-icon" href="/icon-128.png">
+  <link rel="manifest" href="/manifest.json">
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0d1117; color: #c9d1d9; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+    .card { background: #161b22; border: 1px solid #30363d; border-radius: 12px; padding: 32px; text-align: center; max-width: 420px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); }
+    img { width: 96px; height: 96px; border-radius: 16px; margin-bottom: 16px; object-fit: cover; }
+    h1 { margin: 0 0 8px 0; font-size: 24px; color: #f0f6fc; }
+    p { margin: 0 0 16px 0; color: #8b949e; font-size: 14px; line-height: 1.5; }
+    .badge { display: inline-block; background: #238636; color: white; padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <img src="/icon-128.png" alt="Krix Logo">
+    <h1>Krix MCP Gateway</h1>
+    <p>Advanced agentic developer gateway for remote GitHub discovery, Render cloud management, sandboxed execution, and persistent storage.</p>
+    <div class="badge">Active & Ready</div>
+  </div>
+</body>
+</html>`);
 });
 
 // Body-parser and other middleware errors: never leak internals.

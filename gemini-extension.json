@@ -8,12 +8,24 @@
     {
       "src": "https://raw.githubusercontent.com/imunmuted/Krix/gem/assets/icon-48.png",
       "mimeType": "image/png",
+      "sizes": ["48x48"],
       "theme": "light"
     },
     {
       "src": "https://raw.githubusercontent.com/imunmuted/Krix/gem/assets/icon-48.png",
       "mimeType": "image/png",
+      "sizes": ["48x48"],
       "theme": "dark"
+    },
+    {
+      "src": "https://raw.githubusercontent.com/imunmuted/Krix/gem/assets/icon-128.png",
+      "mimeType": "image/png",
+      "sizes": ["128x128"]
+    },
+    {
+      "src": "https://raw.githubusercontent.com/imunmuted/Krix/gem/assets/logo.png",
+      "mimeType": "image/png",
+      "sizes": ["320x320"]
     }
   ],
   "mcpServers": {

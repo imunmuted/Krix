@@ -433,12 +433,46 @@ const MIME_BY_EXT: Record<string, string> = {
 const ACTIVE_EXTS = new Set(['.html', '.htm', '.xhtml', '.svg', '.xml', '.js', '.mjs', '.cjs', '.swf', '.xsl', '.xslt']);
 
 export function contentTypeFor(name: string): string {
+  const base = path.basename(name).toLowerCase();
+  if (['dockerfile', 'makefile', 'license', 'readme', 'procfile', '.env', '.gitignore', '.npmrc', '.editorconfig'].includes(base)) {
+    return 'text/plain';
+  }
   const ext = path.extname(name).toLowerCase();
   return MIME_BY_EXT[ext] || 'application/octet-stream';
 }
 
 export function isImageMime(mime: string): boolean {
-  return /^image\/(png|jpe?g|webp|gif|avif|bmp|tiff|x-icon)$/i.test(mime);
+  return /^image\/(png|jpe?g|webp|gif|avif|bmp|tiff|x-icon|vnd\.microsoft\.icon|svg\+xml)$/i.test(mime);
+}
+
+export function isMcpImageMime(mime: string): boolean {
+  return /^image\/(png|jpe?g|webp|gif)$/i.test(mime);
+}
+
+export function isAudioMime(mime: string): boolean {
+  return mime.startsWith('audio/');
+}
+
+export function isVideoMime(mime: string): boolean {
+  return mime.startsWith('video/');
+}
+
+export function isTextContent(mime: string, filename?: string, buffer?: Buffer): boolean {
+  if (mime.startsWith('text/')) return true;
+  if (/^(application\/(json|xml|javascript|x-javascript|typescript|x-typescript|graphql|sql|x-sql|x-sh|x-shellscript|toml|x-toml|yaml|x-yaml|ld\+json))$/i.test(mime)) return true;
+  if (filename) {
+    const base = path.basename(filename).toLowerCase();
+    if (['dockerfile', 'makefile', 'license', 'readme', 'procfile', '.env', '.gitignore', '.npmrc', '.editorconfig'].includes(base)) return true;
+    if (/\.(ts|tsx|js|jsx|mjs|cjs|py|rb|go|rs|c|h|cpp|hpp|cs|java|kt|kts|swift|php|sh|bash|zsh|sql|toml|yaml|yml|json|md|txt|html|css|scss|xml|csv|tsv|env)$/i.test(filename)) return true;
+  }
+  if (buffer && buffer.length > 0) {
+    const checkLen = Math.min(buffer.length, 8000);
+    for (let i = 0; i < checkLen; i++) {
+      if (buffer[i] === 0x00) return false;
+    }
+    return true;
+  }
+  return false;
 }
 
 export function safeFileName(raw: unknown): string {
@@ -760,9 +794,10 @@ export async function downloadToSandbox(sessionId: string, input: { url: string;
   if (!fetched) throw new Error('Too many redirects.');
   if (fetched.body.length === 0) throw new Error('The server returned an empty file.');
 
-  const contentTypeRaw = fetched.contentType.split(';')[0].trim().toLowerCase() || 'application/octet-stream';
+  const rawType = fetched.contentType.split(';')[0].trim().toLowerCase();
   const urlName = decodeURIComponentSafe(path.basename(new URL(fetched.finalUrl).pathname));
   const name = safeFileName(input.filename || fetched.suggestedName || urlName || 'download');
+  const contentTypeRaw = (rawType && rawType !== 'application/octet-stream' && rawType !== 'binary/octet-stream') ? rawType : contentTypeFor(name);
   const { root, abs } = await resolveSandboxFile(sessionId, name, input.dir);
   await sbxMkdirp(root, path.dirname(abs));
   await sbxWriteText(root, abs, fetched.body, false);
@@ -837,7 +872,7 @@ export function registerFileTools(server: any, sessionId: string, registry: Reco
       switch (args.action) {
         case 'share': {
           const out = await shareFile(sessionId, args, getBaseUrl());
-          if (args.view && isImageMime(out.contentType) && args.sandboxPath) {
+          if (args.view && isMcpImageMime(out.contentType) && args.sandboxPath) {
             const { root, abs } = await resolveSandboxFile(sessionId, args.sandboxPath, args.dir);
             const imgData = await sbxReadBytes(root, abs, fileConfig.maxFileBytes);
             return formatImageResponse(imgData, out.contentType, { ...out, note: 'Give downloadUrl to the user for external sharing.' });
@@ -918,7 +953,7 @@ export function registerFileTools(server: any, sessionId: string, registry: Reco
         case 'download': {
           if (!args.url) throw new Error('download needs a url.');
           const dl = await downloadToSandbox(sessionId, args);
-          if (args.view && isImageMime(dl.contentType)) {
+          if (args.view && isMcpImageMime(dl.contentType)) {
             return formatImageResponse(dl.data, dl.contentType, dl.result);
           }
           return formatOptimizedResponse(dl.result, 5000);
@@ -949,23 +984,67 @@ export function registerFileTools(server: any, sessionId: string, registry: Reco
             throw new Error('view requires either sandboxPath or id.');
           }
 
-          if (isImageMime(mime)) {
+          if (isMcpImageMime(mime)) {
             return formatImageResponse(buffer, mime, { name: filename, sizeBytes: buffer.length, format: 'image' });
           }
 
-          if (mime.startsWith('text/') || mime === 'application/json' || mime === 'application/xml') {
+          if (mime === 'image/svg+xml') {
             return formatOptimizedResponse({
               name: filename,
               sizeBytes: buffer.length,
               contentType: mime,
+              format: 'svg',
+              dataUri: `data:image/svg+xml;base64,${buffer.toString('base64')}`,
               content: buffer.toString('utf-8')
-            }, 8000);
+            }, 10000);
+          }
+
+          if (isAudioMime(mime) || isVideoMime(mime)) {
+            return formatOptimizedResponse({
+              name: filename,
+              sizeBytes: buffer.length,
+              contentType: mime,
+              category: isVideoMime(mime) ? 'video' : 'audio',
+              dataUri: buffer.length <= 5 * 1024 * 1024 ? `data:${mime};base64,${buffer.toString('base64')}` : undefined,
+              base64Sample: buffer.toString('base64').slice(0, 1000),
+              note: 'Multimedia file. Use action: share to generate a streaming or download link.'
+            }, 4000);
+          }
+
+          if (mime === 'application/pdf') {
+            return formatOptimizedResponse({
+              name: filename,
+              sizeBytes: buffer.length,
+              contentType: 'application/pdf',
+              category: 'pdf',
+              dataUri: buffer.length <= 5 * 1024 * 1024 ? `data:application/pdf;base64,${buffer.toString('base64')}` : undefined,
+              base64Sample: buffer.toString('base64').slice(0, 1000),
+              note: 'PDF document. Use action: share to generate a download link for viewing.'
+            }, 4000);
+          }
+
+          if (isTextContent(mime, filename, buffer)) {
+            const text = buffer.toString('utf-8');
+            const offset = Math.max(0, args.offset || 0);
+            const limit = Math.min(args.limit || 8000, 30000);
+            const slice = text.slice(offset, offset + limit);
+            const out: Record<string, any> = {
+              name: filename,
+              sizeBytes: buffer.length,
+              contentType: mime,
+              totalChars: text.length,
+              offset,
+              content: slice
+            };
+            if (offset + slice.length < text.length) out.nextOffset = offset + slice.length;
+            return formatOptimizedResponse(out, 12000);
           }
 
           return formatOptimizedResponse({
             name: filename,
             sizeBytes: buffer.length,
             contentType: mime,
+            isBinary: true,
             base64Sample: buffer.toString('base64').slice(0, 2000),
             note: 'Binary file. Use action: share to generate a download link for the user.'
           }, 3000);
@@ -980,14 +1059,24 @@ export function registerFileTools(server: any, sessionId: string, registry: Reco
 // HTTP download route
 // ---------------------------------------------------------------------------------------------
 
-function contentDisposition(name: string): string {
+function contentDisposition(name: string, inline: boolean = false): string {
   const ascii = name.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
-  return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name).replace(/['()*]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase())}`;
+  const dispType = inline ? 'inline' : 'attachment';
+  return `${dispType}; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name).replace(/['()*]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase())}`;
 }
 
 export function registerFileRoutes(app: Express): void {
   const limiter = createLimiter({ windowMs: 60_000, max: 60 });
   const missLimiter = createLimiter({ windowMs: 10 * 60_000, max: 30 });
+
+  app.options('/files/:token{/:name}', (_req: Request, res: Response) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', '*');
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    res.setHeader('Cross-Origin-Embedder-Policy', 'unsafe-none');
+    res.status(204).end();
+  });
 
   app.get('/files/:token{/:name}', rateLimitMiddleware(limiter, 'Too many download requests.'), async (req: Request, res: Response) => {
     const ip = req.ip || 'unknown';
@@ -1005,15 +1094,25 @@ export function registerFileRoutes(app: Express): void {
       const rawExt = path.extname(file.name).toLowerCase();
       const isDangerous = ACTIVE_EXTS.has(rawExt);
       const effectiveType = isDangerous ? 'application/octet-stream' : contentTypeFor(file.name);
+      const isViewableMedia = !isDangerous && (isImageMime(effectiveType) || isAudioMime(effectiveType) || isVideoMime(effectiveType) || effectiveType === 'application/pdf');
+      const isInline = isViewableMedia || req.query.inline === 'true' || req.query.view === 'true';
 
       res.status(200);
       res.setHeader('Content-Type', effectiveType);
       res.setHeader('Content-Length', String(file.size));
-      res.setHeader('Content-Disposition', contentDisposition(file.name));
+      res.setHeader('Content-Disposition', contentDisposition(file.name, isInline));
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', '*');
+      res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+      res.setHeader('Cross-Origin-Embedder-Policy', 'unsafe-none');
+      res.setHeader('Timing-Allow-Origin', '*');
       res.setHeader('X-Content-Type-Options', 'nosniff');
-      res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+      if (isDangerous) {
+        res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+      }
       res.setHeader('Referrer-Policy', 'no-referrer');
-      res.setHeader('Cache-Control', 'private, no-store');
+      res.setHeader('Cache-Control', 'public, max-age=3600');
       res.setHeader('X-Robots-Tag', 'noindex, nofollow');
       if (req.method === 'HEAD') { file.stream.destroy(); res.end(); return; }
       await pipeline(file.stream, res);

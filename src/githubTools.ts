@@ -1,7 +1,15 @@
+import path from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { Octokit } from '@octokit/rest';
 import { z } from 'zod';
-import { formatOptimizedResponse, formatError, getToolAnnotations, resolveInputString, getSessionContext, updateSessionContext, makeRegistrar, assertValidOwnerRepo, assertValidRef } from './security.js';
+import {
+  formatOptimizedResponse, formatImageResponse, formatError, getToolAnnotations, resolveInputString,
+  getSessionContext, updateSessionContext, makeRegistrar, assertValidOwnerRepo, assertValidRef,
+  isBinaryBuffer
+} from './security.js';
+import { contentTypeFor, isImageMime, isMcpImageMime } from './fileShare.js';
+import { assertSandboxAllowed, sbxMkdirp, sbxWriteText } from './sandboxProc.js';
+import { resolveSandboxFile } from './sandboxTools.js';
 
 function handleGitHubError(err: any): any {
   if (err?.status === 403 && err?.headers?.['x-ratelimit-remaining'] === '0') {
@@ -168,7 +176,7 @@ export function registerGitHubTools(server: McpServer, octokit: Octokit, session
   });
 
   reg('get_file_contents', {
-    description: 'Fetch file contents or specific line window. Default limit 100 lines, max limit 500 lines.',
+    description: 'Fetch file contents or line window. Supports binary-safe base64 encoding, native image viewing for multimedia, and direct sandboxPath transfer without UTF-8 corruption.',
     inputSchema: {
       owner: z.string().optional(),
       repo: z.string().optional(),
@@ -176,17 +184,53 @@ export function registerGitHubTools(server: McpServer, octokit: Octokit, session
       ref: z.string().optional(),
       startLine: z.number().optional().default(1),
       endLine: z.number().optional(),
-      limit: z.number().optional().default(100)
+      limit: z.number().optional().default(100),
+      encoding: z.enum(['utf-8', 'base64', 'raw']).optional().describe('Desired output encoding (default: utf-8 for text, base64 for binary/multimedia).'),
+      sandboxPath: z.string().optional().describe('If specified, writes the fetched file directly into the sandbox at this path with zero encoding corruption.'),
+      view: z.boolean().optional().describe('If true and the file is an image, renders native MCP image block inline.')
     },
     annotations: getToolAnnotations('get_file_contents')
   }, async (args: any) => {
-    const { owner, repo, path, ref, startLine, endLine, limit } = args;
+    const { owner, repo, path: filePath, ref, startLine, endLine, limit, encoding, sandboxPath, view } = args;
     try {
       const target = resolveRepo(owner, repo, sessionId);
       const activeRef = ref || getSessionContext(sessionId).branch || 'main';
-      const res = await octokit.repos.getContent({ owner: target.owner, repo: target.repo, path, ref: activeRef });
+      const res = await octokit.repos.getContent({ owner: target.owner, repo: target.repo, path: filePath, ref: activeRef });
       if ('content' in res.data && typeof res.data.content === 'string') {
-        const raw = Buffer.from(res.data.content, 'base64').toString('utf-8');
+        const rawBuffer = Buffer.from(res.data.content.replace(/\r?\n/g, ''), 'base64');
+        const mime = contentTypeFor(filePath);
+        const isBin = isBinaryBuffer(rawBuffer) || (isImageMime(mime) && mime !== 'image/svg+xml');
+
+        if (sandboxPath) {
+          assertSandboxAllowed();
+          const { root, abs } = await resolveSandboxFile(sessionId, sandboxPath);
+          await sbxMkdirp(root, path.dirname(abs));
+          await sbxWriteText(root, abs, rawBuffer, false);
+          return formatOptimizedResponse({
+            savedToSandbox: sandboxPath,
+            path: filePath,
+            sizeBytes: rawBuffer.length,
+            contentType: mime,
+            note: 'File copied directly from GitHub to sandbox with 100% binary fidelity.'
+          });
+        }
+
+        if ((view || !encoding) && isMcpImageMime(mime)) {
+          return formatImageResponse(rawBuffer, mime, { path: filePath, sizeBytes: rawBuffer.length, format: 'image' });
+        }
+
+        if (encoding === 'base64' || isBin) {
+          return formatOptimizedResponse({
+            path: filePath,
+            sizeBytes: rawBuffer.length,
+            contentType: mime,
+            encoding: 'base64',
+            content_b64: rawBuffer.toString('base64'),
+            isBinary: isBin
+          }, 8000);
+        }
+
+        const raw = rawBuffer.toString('utf-8');
         const lines = raw.split('\n');
         const start = Math.max(1, startLine || 1);
         let lineCount = limit || 100;
@@ -954,33 +998,46 @@ export function registerGitHubTools(server: McpServer, octokit: Octokit, session
   });
 
   reg('create_or_update_file', {
-    description: 'Create or update file. Supports Base64 (content_b64).',
+    description: 'Create or update file. Supports plain text content or binary-safe content_b64 for non-text/multimedia files without UTF-8 corruption.',
     inputSchema: {
       owner: z.string().optional(),
       repo: z.string().optional(),
       path: z.string(),
       content: z.string().optional(),
-      content_b64: z.string().optional(),
+      content_b64: z.string().optional().describe('Binary-safe Base64 encoded file content. Required for multimedia and binary files to prevent corruption.'),
+      encoding: z.enum(['utf-8', 'base64']).optional().describe('Encoding of the content parameter (default: utf-8, or base64).'),
       message: z.string(),
       branch: z.string().optional(),
       sha: z.string().optional()
     },
     annotations: getToolAnnotations('create_or_update_file')
   }, async (args: any) => {
-    const { owner, repo, path, content, content_b64, message, branch, sha } = args;
+    const { owner, repo, path: filePath, content, content_b64, encoding, message, branch, sha } = args;
     try {
       const target = resolveRepo(owner, repo, sessionId);
       const activeBranch = branch || getSessionContext(sessionId).branch || 'main';
-      const text = resolveInputString(content, content_b64);
+      let b64Payload: string;
+      if (content_b64 !== undefined) {
+        b64Payload = content_b64.replace(/\s+/g, '');
+      } else if (content !== undefined) {
+        if (encoding === 'base64') {
+          b64Payload = content.replace(/\s+/g, '');
+        } else {
+          b64Payload = Buffer.from(content, 'utf-8').toString('base64');
+        }
+      } else {
+        throw new Error('Either content or content_b64 must be provided.');
+      }
+
       let activeSha = sha;
       if (!activeSha) {
         try {
-          const existing = await octokit.repos.getContent({ owner: target.owner, repo: target.repo, path, ref: activeBranch });
+          const existing = await octokit.repos.getContent({ owner: target.owner, repo: target.repo, path: filePath, ref: activeBranch });
           if (!Array.isArray(existing.data) && 'sha' in existing.data) activeSha = existing.data.sha;
         } catch {}
       }
       const res = await octokit.repos.createOrUpdateFileContents({
-        owner: target.owner, repo: target.repo, path, message, content: Buffer.from(text, 'utf-8').toString('base64'), branch: activeBranch, sha: activeSha
+        owner: target.owner, repo: target.repo, path: filePath, message, content: b64Payload, branch: activeBranch, sha: activeSha
       });
       return formatOptimizedResponse(`Committed SHA: ${res.data.commit.sha}`);
     } catch (err) { return handleGitHubError(err); }

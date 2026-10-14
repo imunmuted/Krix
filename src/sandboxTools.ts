@@ -5,18 +5,18 @@ import path from 'node:path';
 import os from 'node:os';
 import { z } from 'zod';
 import {
-  formatOptimizedResponse, formatError, getToolAnnotations, sanitizeCommand, sanitizePath,
+  formatOptimizedResponse, formatImageResponse, formatError, getToolAnnotations, sanitizeCommand, sanitizePath,
   getSessionContext, updateSessionContext, deleteSessionContext, makeRegistrar, getAuthKeyForSession,
-  sandboxRootPath, assertValidOwnerRepo, assertValidRef, assertValidPackageSpec
+  sandboxRootPath, assertValidOwnerRepo, assertValidRef, assertValidPackageSpec, isBinaryBuffer
 } from './security.js';
 import {
   assertSandboxAllowed, getIsolation, runProc, runShell, spawnShell, spawnPersistentShell, killTree,
   buildSandboxEnv, ensureSandboxRoot, sandboxHome, sandboxTmp, scrubbedEnvForGit,
-  sbxStat, sbxReadText, sbxWriteText, sbxMkdirp, sbxRemoveFile, sbxRemoveTree, assertInsideRealRoot,
+  sbxStat, sbxReadText, sbxReadBytes, sbxWriteText, sbxMkdirp, sbxRemoveFile, sbxRemoveTree, assertInsideRealRoot,
   type RunResult
 } from './sandboxProc.js';
 import fsp from 'node:fs/promises';
-import { getMongoStorageStatus } from './fileShare.js';
+import { getMongoStorageStatus, contentTypeFor, isImageMime, isMcpImageMime } from './fileShare.js';
 
 interface ActiveProcess {
   pid: number;
@@ -554,16 +554,19 @@ export function registerSandboxTools(server: McpServer, sessionId: string, githu
   });
 
   reg('sandbox_file', {
-    description: 'Read, write, append to, edit (find-and-replace via old_str/new_str), or delete a file in the sandbox — safer than shell-escaping content through sandbox_exec. For edit, old_str can be any length — a single line or an entire block — as long as it matches the file exactly once; it is not limited to short snippets. To give a file to the user, use sandbox_store (action:share).',
+    description: 'Read, write, append to, edit (find-and-replace via old_str/new_str), or delete a file in the sandbox — safer than shell-escaping content through sandbox_exec. Supports binary-safe content_b64 and base64/hex encodings for multimedia and non-text files without corruption. For edit, old_str can be any length — a single line or an entire block — as long as it matches the file exactly once. To give a file to the user, use sandbox_store (action:share).',
     inputSchema: {
       action: z.enum(['read', 'write', 'append', 'edit', 'delete']),
       path: z.string().min(1).max(1024),
       content: z.string().optional(),
+      content_b64: z.string().optional().describe('Binary-safe base64 encoded content for write/append. Prevents UTF-8 replacement corruption.'),
+      encoding: z.enum(['utf-8', 'base64', 'hex']).optional().describe('Input encoding for write/append, or desired output encoding for read (default: utf-8 for text, base64 for binary).'),
       old_str: z.string().optional().describe('Required for action:edit. Must match the file content in exactly one place.'),
       new_str: z.string().optional().describe('Required for action:edit. Replaces old_str; empty string deletes the matched text.'),
       dir: z.string().optional(),
       offset: z.number().optional().describe('For action:read — char offset to start from, for paginating large files.'),
-      limit: z.number().optional().describe(`For action:read — max chars to return (default/cap: ${OUT_CAP}).`)
+      limit: z.number().optional().describe(`For action:read — max chars to return (default/cap: ${OUT_CAP}).`),
+      view: z.boolean().optional().describe('For action:read — if true and the file is an image, renders native MCP image block inline.')
     },
     annotations: getToolAnnotations('sandbox_file')
   }, async (args: any) => {
@@ -577,11 +580,30 @@ export function registerSandboxTools(server: McpServer, sessionId: string, githu
       if (args.action === 'read') {
         const st = await sbxStat(root, abs);
         if (st.kind !== 'file') return formatError(`No such file: ${args.path}`);
-        const content = await sbxReadText(root, abs, MAX_READ_BYTES);
+        const buf = await sbxReadBytes(root, abs, MAX_READ_BYTES);
+        const mime = contentTypeFor(abs);
+        const isBin = isBinaryBuffer(buf) || (isImageMime(mime) && mime !== 'image/svg+xml');
+
+        if ((args.view || !args.encoding) && isMcpImageMime(mime)) {
+          return formatImageResponse(buf, mime, { path: args.path, sizeBytes: st.size, format: 'image' });
+        }
+
+        if (args.encoding === 'base64' || isBin) {
+          return formatOptimizedResponse({
+            path: args.path,
+            sizeBytes: st.size,
+            contentType: mime,
+            encoding: 'base64',
+            content_b64: buf.toString('base64'),
+            isBinary: isBin
+          }, 8000);
+        }
+
+        const content = buf.toString('utf-8');
         const offset = Math.max(0, args.offset || 0);
         const limit = Math.min(args.limit || OUT_CAP, OUT_CAP);
         const slice = content.slice(offset, offset + limit);
-        const out: Record<string, any> = { sizeBytes: st.size, totalChars: content.length, offset };
+        const out: Record<string, any> = { path: args.path, sizeBytes: st.size, totalChars: content.length, offset };
         if (slice) out.content = slice;
         if (offset + slice.length < content.length) out.nextOffset = offset + slice.length;
         return formatOptimizedResponse(out);
@@ -600,22 +622,43 @@ export function registerSandboxTools(server: McpServer, sessionId: string, githu
         if (args.old_str === '') return formatError('`old_str` must not be empty.');
         const st = await sbxStat(root, abs);
         if (st.kind !== 'file') return formatError(`No such file: ${args.path}`);
-        const content = await sbxReadText(root, abs, MAX_READ_BYTES);
+        const buf = await sbxReadBytes(root, abs, MAX_READ_BYTES);
+        if (isBinaryBuffer(buf)) {
+          return formatError(`Cannot perform text edit on binary file '${args.path}'. Use action: write with content_b64 instead.`);
+        }
+        const content = buf.toString('utf-8');
         const count = content.split(args.old_str).length - 1;
         if (count === 0) return formatError('old_str not found in file.');
         if (count > 1) return formatError(`old_str matches ${count} places — make it unique by including more surrounding context.`);
         const idx = content.indexOf(args.old_str);
         const updated = content.slice(0, idx) + args.new_str + content.slice(idx + args.old_str.length);
-        if (Buffer.byteLength(updated) > MAX_WRITE_BYTES) return formatError('Result is too large for sandbox_file; use sandbox_exec.');
-        await sbxWriteText(root, abs, updated, false);
+        const updatedBuf = Buffer.from(updated, 'utf-8');
+        if (updatedBuf.length > MAX_WRITE_BYTES) return formatError('Result is too large for sandbox_file; use sandbox_exec.');
+        await sbxWriteText(root, abs, updatedBuf, false);
         const newStat = await sbxStat(root, abs);
         return formatOptimizedResponse({ edited: args.path, sizeBytes: newStat.size });
       }
 
-      if (args.content === undefined) return formatError('`content` is required for write/append.');
-      if (Buffer.byteLength(args.content) > MAX_WRITE_BYTES) return formatError(`Content exceeds ${MAX_WRITE_BYTES / 1024 / 1024}MB; generate it with code in the sandbox instead.`);
+      if (args.content_b64 === undefined && args.content === undefined) {
+        return formatError('`content` or `content_b64` is required for write/append.');
+      }
+      let writeBuf: Buffer;
+      if (args.content_b64 !== undefined) {
+        writeBuf = Buffer.from(args.content_b64.replace(/\s+/g, ''), 'base64');
+      } else {
+        if (args.encoding === 'base64') {
+          writeBuf = Buffer.from(args.content.replace(/\s+/g, ''), 'base64');
+        } else if (args.encoding === 'hex') {
+          writeBuf = Buffer.from(args.content.replace(/\s+/g, ''), 'hex');
+        } else {
+          writeBuf = Buffer.from(args.content, 'utf-8');
+        }
+      }
+      if (writeBuf.length > MAX_WRITE_BYTES) {
+        return formatError(`Content exceeds ${MAX_WRITE_BYTES / 1024 / 1024}MB; generate it with code in the sandbox instead.`);
+      }
       await sbxMkdirp(root, path.dirname(abs));
-      await sbxWriteText(root, abs, args.content, args.action === 'append');
+      await sbxWriteText(root, abs, writeBuf, args.action === 'append');
       const stat = await sbxStat(root, abs);
       return formatOptimizedResponse({ [args.action === 'append' ? 'appended' : 'wrote']: args.path, sizeBytes: stat.size });
     } catch (err) { return formatError(err); }

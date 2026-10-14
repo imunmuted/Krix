@@ -737,8 +737,22 @@ export function sanitizeCommand(cmd: string): void {
 }
 
 export function resolveInputString(plain?: string, b64?: string): string {
-  if (b64) return Buffer.from(b64, 'base64').toString('utf-8');
+  if (b64) return Buffer.from(b64.replace(/\s+/g, ''), 'base64').toString('utf-8');
   return plain || '';
+}
+
+export function resolveInputBuffer(plain?: string, b64?: string): Buffer {
+  if (b64) return Buffer.from(b64.replace(/\s+/g, ''), 'base64');
+  return Buffer.from(plain || '', 'utf-8');
+}
+
+export function isBinaryBuffer(buf: Buffer): boolean {
+  if (!buf || buf.length === 0) return false;
+  const len = Math.min(buf.length, 8000);
+  for (let i = 0; i < len; i++) {
+    if (buf[i] === 0x00) return true;
+  }
+  return false;
 }
 
 export function safeRegexTest(pattern: string, flags: string, text: string, timeoutMs: number = 200): boolean {

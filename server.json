@@ -1,7 +1,7 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.imunmuted/krix",
-  "description": "Advanced agentic developer gateway for remote GitHub discovery, Render cloud management, sandboxed execution, and persistent storage.",
+  "description": "Advanced agentic gateway for remote GitHub discovery, Render management, and sandboxed execution.",
   "title": "Krix",
   "repository": {
     "url": "https://github.com/imunmuted/Krix",
@@ -53,13 +53,13 @@
       "src": "https://raw.githubusercontent.com/imunmuted/Krix/gem/assets/logo.png",
       "url": "https://raw.githubusercontent.com/imunmuted/Krix/gem/assets/logo.png",
       "mimeType": "image/png",
-      "sizes": ["320x320", "any"]
+      "sizes": ["320x320"]
     },
     {
       "src": "https://krix.onrender.com/logo.png",
       "url": "https://krix.onrender.com/logo.png",
       "mimeType": "image/png",
-      "sizes": ["320x320", "any"]
+      "sizes": ["320x320"]
     }
   ],
   "remotes": [

@@ -98,7 +98,7 @@ function createMasterServer(githubToken: string, renderToken: string | undefined
     name: 'krix',
     title: 'Krix',
     version: '1.1.0',
-    description: 'Advanced agentic developer gateway for remote GitHub discovery, Render cloud management, sandboxed execution, and persistent storage.',
+    description: 'Advanced agentic gateway for remote GitHub discovery, Render management, and sandboxed execution.',
     websiteUrl: 'https://github.com/imunmuted/Krix',
     icons: serverIcons
   }, {
@@ -113,7 +113,6 @@ function createMasterServer(githubToken: string, renderToken: string | undefined
   (server.server as any)._serverInfo.iconUrl = GITHUB_ICON_48_URL;
   (server.server as any)._serverInfo.logo = GITHUB_LOGO_URL;
   (server.server as any)._serverInfo.logoUrl = GITHUB_LOGO_URL;
-  (server.server as any)._serverInfo.iconDataUri = ICON_48_DATA_URI;
   (server.server as any)._serverInfo.icons = serverIcons;
 
   const octokit = new Octokit({ auth: githubToken || '' });
@@ -381,20 +380,13 @@ app.get(['/manifest.json', '/manifest.webmanifest'], (req, res) => {
   res.json({
     name: 'Krix',
     short_name: 'Krix',
-    description: 'Advanced agentic developer gateway for remote GitHub discovery, Render cloud management, sandboxed execution, and persistent storage.',
+    description: 'Advanced agentic gateway for remote GitHub discovery, Render management, and sandboxed execution.',
     start_url: '/',
     display: 'standalone',
-    icons: [
-      { src: GITHUB_ICON_48_URL, sizes: '48x48', type: 'image/png' },
-      { src: RENDER_ICON_48_URL, sizes: '48x48', type: 'image/png' },
-      { src: GITHUB_ICON_128_URL, sizes: '128x128', type: 'image/png' },
-      { src: RENDER_ICON_128_URL, sizes: '128x128', type: 'image/png' },
-      { src: GITHUB_LOGO_URL, sizes: '320x320', type: 'image/png' },
-      { src: RENDER_LOGO_URL, sizes: '320x320', type: 'image/png' },
-      { src: `${base}/icon-48.png`, sizes: '48x48', type: 'image/png' },
-      { src: `${base}/icon-128.png`, sizes: '128x128', type: 'image/png' },
-      { src: `${base}/logo.png`, sizes: '320x320', type: 'image/png' }
-    ]
+    icons: getServerIcons(base).map((icon) => ({
+      ...icon,
+      type: icon.mimeType
+    }))
   });
 });
 
@@ -407,7 +399,7 @@ app.get(['/server.json', '/.well-known/mcp.json'], (req, res) => {
   res.json({
     $schema: 'https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json',
     name: 'io.github.imunmuted/krix',
-    description: 'Advanced agentic developer gateway for remote GitHub discovery, Render cloud management, sandboxed execution, and persistent storage.',
+    description: 'Advanced agentic gateway for remote GitHub discovery, Render management, and sandboxed execution.',
     title: 'Krix',
     repository: {
       url: 'https://github.com/imunmuted/Krix',
@@ -441,7 +433,7 @@ app.get('/gemini-extension.json', (req, res) => {
     name: 'krix',
     title: 'Krix',
     version: '1.1.0',
-    description: 'Advanced agentic developer gateway for remote GitHub discovery, Render cloud management, sandboxed execution, and persistent storage.',
+    description: 'Advanced agentic gateway for remote GitHub discovery, Render management, and sandboxed execution.',
     icon: GITHUB_ICON_48_URL,
     iconUrl: GITHUB_ICON_48_URL,
     logo: GITHUB_LOGO_URL,
@@ -449,7 +441,7 @@ app.get('/gemini-extension.json', (req, res) => {
     icons: getServerIcons(base),
     mcpServers: {
       krix: {
-        description: 'Advanced agentic developer gateway for remote GitHub discovery, Render cloud management, sandboxed execution, and persistent storage.',
+        description: 'Advanced agentic gateway for remote GitHub discovery, Render management, and sandboxed execution.',
         httpUrl: `${base}/mcp`,
         url: `${base}/mcp`,
         headers: {

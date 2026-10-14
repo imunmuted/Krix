@@ -1,0 +1,69 @@
+{
+  "name": "Krix",
+  "short_name": "Krix",
+  "description": "Advanced agentic gateway for remote GitHub discovery, Render management, and sandboxed execution.",
+  "start_url": "/",
+  "display": "standalone",
+  "icons": [
+    {
+      "src": "https://raw.githubusercontent.com/imunmuted/Krix/gem/assets/icon-48.png",
+      "url": "https://raw.githubusercontent.com/imunmuted/Krix/gem/assets/icon-48.png",
+      "mimeType": "image/png",
+      "type": "image/png",
+      "sizes": ["48x48"],
+      "theme": "light"
+    },
+    {
+      "src": "https://raw.githubusercontent.com/imunmuted/Krix/gem/assets/icon-48.png",
+      "url": "https://raw.githubusercontent.com/imunmuted/Krix/gem/assets/icon-48.png",
+      "mimeType": "image/png",
+      "type": "image/png",
+      "sizes": ["48x48"],
+      "theme": "dark"
+    },
+    {
+      "src": "https://krix.onrender.com/icon-48.png",
+      "url": "https://krix.onrender.com/icon-48.png",
+      "mimeType": "image/png",
+      "type": "image/png",
+      "sizes": ["48x48"],
+      "theme": "light"
+    },
+    {
+      "src": "https://krix.onrender.com/icon-48.png",
+      "url": "https://krix.onrender.com/icon-48.png",
+      "mimeType": "image/png",
+      "type": "image/png",
+      "sizes": ["48x48"],
+      "theme": "dark"
+    },
+    {
+      "src": "https://raw.githubusercontent.com/imunmuted/Krix/gem/assets/icon-128.png",
+      "url": "https://raw.githubusercontent.com/imunmuted/Krix/gem/assets/icon-128.png",
+      "mimeType": "image/png",
+      "type": "image/png",
+      "sizes": ["128x128"]
+    },
+    {
+      "src": "https://krix.onrender.com/icon-128.png",
+      "url": "https://krix.onrender.com/icon-128.png",
+      "mimeType": "image/png",
+      "type": "image/png",
+      "sizes": ["128x128"]
+    },
+    {
+      "src": "https://raw.githubusercontent.com/imunmuted/Krix/gem/assets/logo.png",
+      "url": "https://raw.githubusercontent.com/imunmuted/Krix/gem/assets/logo.png",
+      "mimeType": "image/png",
+      "type": "image/png",
+      "sizes": ["320x320"]
+    },
+    {
+      "src": "https://krix.onrender.com/logo.png",
+      "url": "https://krix.onrender.com/logo.png",
+      "mimeType": "image/png",
+      "type": "image/png",
+      "sizes": ["320x320"]
+    }
+  ]
+}

@@ -79,34 +79,13 @@ export function getServerIcons(baseUrl: string = DEFAULT_PUBLIC_URL): McpIcon[] 
       src: GITHUB_LOGO_URL,
       url: GITHUB_LOGO_URL,
       mimeType: "image/png",
-      sizes: ["320x320", "any"]
+      sizes: ["320x320"]
     },
     {
       src: RENDER_LOGO_URL,
       url: RENDER_LOGO_URL,
       mimeType: "image/png",
-      sizes: ["320x320", "any"]
-    },
-    // 4. Embedded Base64 Data URIs (zero network roundtrips for offline/embedded MCP clients)
-    {
-      src: ICON_48_DATA_URI,
-      url: ICON_48_DATA_URI,
-      mimeType: "image/png",
-      sizes: ["48x48"],
-      theme: "light"
-    },
-    {
-      src: ICON_48_DATA_URI,
-      url: ICON_48_DATA_URI,
-      mimeType: "image/png",
-      sizes: ["48x48"],
-      theme: "dark"
-    },
-    {
-      src: ICON_24_DATA_URI,
-      url: ICON_24_DATA_URI,
-      mimeType: "image/png",
-      sizes: ["24x24"]
+      sizes: ["320x320"]
     }
   ];
 
@@ -136,7 +115,7 @@ export function getServerIcons(baseUrl: string = DEFAULT_PUBLIC_URL): McpIcon[] 
         src: `${base}/logo.png`,
         url: `${base}/logo.png`,
         mimeType: "image/png",
-        sizes: ["320x320", "any"]
+        sizes: ["320x320"]
       }
     );
   }

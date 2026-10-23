@@ -29,6 +29,12 @@ This reference guide provides exhaustive documentation for all **15 Sandbox Tool
 
 ---
 
+## 📥 Files the user uploaded from the web page
+
+The user can drop files into the sandbox from the server's `/upload` page (temporary 10-minute session). They appear in the sandbox root under `web-uploads/<filename>`. When the user says they uploaded something, look there first (for example `sandbox_exec` with `ls -la web-uploads/`, then read with `sandbox_file`). Those files are deleted when the user's upload session ends (timer, button, or tab closed), so copy anything you need to keep elsewhere in the sandbox straight away.
+
+---
+
 ## ⚠️ Key Clarification: `sandbox_file` vs `sandbox_store`
 
 To prevent any confusion between similarly named tools:

@@ -37,6 +37,15 @@ One unified tool moves files between the sandbox, MongoDB cloud storage, the int
 
 Shared links are 256-bit random tokens, always served with `nosniff` and sandboxing CSP. Supports 250+ file types spanning images, audio, video, documents, AI models, archives, and code. Setup: set `MONGODB_URI` (see `.env.example`).
 
+### 2b. Temporary Web Upload (`/upload`)
+Open `https://<your-server>/upload`, enter your **MCP API key**, and you get a **10-minute upload session** (`UPLOAD_SESSION_MINUTES`). Drag in files and they are written straight into your sandbox at `web-uploads/<filename>`, so the AI can read them with `sandbox_file` / `sandbox_exec` immediately - just tell it to look in `web-uploads/`.
+
+- The session ends on the timer, with the **End session** button, or as soon as the tab is closed or reloaded; every uploaded file is deleted when it ends.
+- The page keeps the session token in memory only (no cookies or storage); the server stores only its SHA-256 hash.
+- Files are written as the unprivileged sandbox user. Defaults: 25 MB per file, 20 files, 100 MB per session (`UPLOAD_MAX_FILE_MB`, `UPLOAD_MAX_FILES`, `UPLOAD_MAX_TOTAL_MB`). Disable with `ENABLE_WEB_UPLOAD=false`.
+- Files go to the same sandbox your MCP client uses: the identity is the GitHub token, so if your client sends its own `x-github-token`, paste it under **Advanced** on the page. With the server's default token (the usual setup) you can leave it blank.
+- The sandbox is cleared when your MCP session closes or goes idle, which also removes uploaded files, so upload shortly before you need them.
+
 ### 3. Surgical Code Editing & Structural Search
 - **`str_replace_editor`**: Performs exact string block replacement. On match failure, it calculates **Levenshtein Distance Similarity** and returns a line-numbered context hint showing the closest matching code lines with similarity percentages. Supports Base64 (`old_str_b64`, `new_str_b64`).
 - **`patch_contents`**: Enables direct line-range edits (`startLine` to `endLine`) without requiring string matching.

@@ -527,7 +527,12 @@ export function sanitizePath(inputPath: string, rootDir: string = process.cwd())
 
 /** Root directory of the sandbox that belongs to a session's authenticated identity. */
 export function sandboxRootPath(sessionId: string): string {
-  return path.join(os.tmpdir(), `krix_sbx_${getAuthKeyForSession(sessionId)}`);
+  return sandboxRootForAuthKey(getAuthKeyForSession(sessionId));
+}
+
+/** Sandbox root for an auth key (used by the web upload page, which has no MCP session). */
+export function sandboxRootForAuthKey(authKey: string): string {
+  return path.join(os.tmpdir(), `krix_sbx_${authKey}`);
 }
 
 function validateSandboxCwd(sessionId: string, cwd: string): string {

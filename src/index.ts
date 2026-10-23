@@ -20,6 +20,7 @@ import { registerGitHubTools } from './githubTools.js';
 import { registerRenderTools } from './renderTools.js';
 import { registerSandboxTools, destroySandbox } from './sandboxTools.js';
 import { registerFileTools, registerFileRoutes, startFileSweeper, stopFileStore } from './fileShare.js';
+import { registerUploadRoutes, shutdownUploadSessions } from './uploadSessions.js';
 import { logIsolationStatus } from './sandboxProc.js';
 import { createLimiter, rateLimitMiddleware, clientIp } from './rateLimit.js';
 import {
@@ -194,6 +195,13 @@ app.get('/healthz', (_req, res) => { res.json({ ok: true }); });
 
 
 registerFileRoutes(app);
+
+// Temporary web upload page: MCP key -> short-lived session -> files land in the caller's sandbox.
+registerUploadRoutes(app, {
+  apiKey: MCP_API_KEY,
+  defaultGithubToken: DEFAULT_GITHUB_PAT,
+  publicBaseUrl: process.env.PUBLIC_BASE_URL
+});
 
 const failedAuthLimiter = createLimiter({ windowMs: 15 * 60_000, max: 10 });
 
@@ -482,6 +490,7 @@ app.get('/', (_req, res) => {
     <h1>Krix MCP Gateway</h1>
     <p>Advanced agentic developer gateway for remote GitHub discovery, Render cloud management, sandboxed execution, and persistent storage.</p>
     <div class="badge">Active & Ready</div>
+    <p style="margin:16px 0 0"><a href="/upload" style="color:#58a6ff;font-size:13px;text-decoration:none">Upload files to your sandbox &rarr;</a></p>
   </div>
 </body>
 </html>`);
@@ -528,6 +537,7 @@ async function shutdown() {
   const force = setTimeout(() => process.exit(1), 10_000);
   force.unref();
   await Promise.allSettled([...transports.keys()].map((id) => destroySandbox(id)));
+  await shutdownUploadSessions().catch(() => {});
   await stopFileStore().catch(() => {});
   server.close(() => process.exit(0));
 }

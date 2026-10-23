@@ -347,7 +347,7 @@ function requireRepo(sessionId: string): { root: string; dir: string; owner: str
 // ---------------------------------------------------------------------------------------------
 
 export function registerSandboxTools(server: McpServer, sessionId: string, githubToken: string | undefined, registry: Record<string, any>) {
-  const reg = makeRegistrar(server, registry);
+  const reg = makeRegistrar(server, registry, sessionId);
 
   reg('sandbox_exec', {
     description: 'Run a shell command as an unprivileged sandbox user. By default runs in a persistent shell that keeps cd/export/venv state across calls (like a real terminal) — pass `persistent:false` for an isolated one-off exec instead. Pass `dir` for a one-off working directory (state changes in that call do not persist). Pass `background:true` to run detached and track it via sandbox_ps (always isolated, unaffected by `persistent`). Files you create here can be handed to the user with sandbox_store (action:share).',
@@ -713,8 +713,8 @@ export function registerSandboxTools(server: McpServer, sessionId: string, githu
         runtimes,
         isolation: iso.enforced ? 'enforced (unprivileged sandbox user)' : `NOT enforced (${iso.reason})`,
         mongoDb,
-        repo: ctx.owner && ctx.repo ? `${ctx.owner}/${ctx.repo}` : undefined,
-        branch: ctx.branch,
+        repo: ctx.owner && ctx.repo ? `${ctx.owner}/${ctx.repo}` : 'NA',
+        branch: ctx.branch || 'NA',
         cloned,
         cwd: ctx.cwd,
         envVars: ctx.env ? Object.keys(ctx.env).length : undefined,

@@ -24,7 +24,7 @@ export interface SessionContext {
 const sessionContexts = new Map<string, SessionContext>();
 
 const sessionAuthKey = new Map<string, string>();
-const lastKnownContextByAuth = new Map<string, { owner?: string; repo?: string; branch?: string; sandboxDir?: string; cwd?: string; env?: Record<string, string>; lastUsed: number }>();
+const lastKnownContextByAuth = new Map<string, { owner?: string; repo?: string; branch?: string; sandboxDir?: string; cwd?: string; env?: Record<string, string>; lastUsed: number; lastSandboxUse?: number }>();
 
 const MIN_AUTH_CONTEXT_TTL_MS = 5 * 60 * 1000;
 const MAX_AUTH_CONTEXT_TTL_MS = 24 * 60 * 60 * 1000;
@@ -35,6 +35,37 @@ function resolveConfiguredTtl(): number {
   return Math.min(MAX_AUTH_CONTEXT_TTL_MS, Math.max(MIN_AUTH_CONTEXT_TTL_MS, raw));
 }
 const AUTH_CONTEXT_TTL_MS = resolveConfiguredTtl();
+
+/**
+ * After this long without any sandbox use, the active repo, branch and clone pointer are forgotten
+ * (shown as "NA" in sandbox_status). Default 30 minutes; override with REPO_IDLE_MINUTES (1-1440).
+ */
+function resolveRepoIdleMs(): number {
+  const raw = Number(process.env.REPO_IDLE_MINUTES);
+  if (!Number.isFinite(raw) || raw <= 0) return 30 * 60 * 1000;
+  return Math.min(1440, Math.max(1, raw)) * 60 * 1000;
+}
+const REPO_IDLE_MS = resolveRepoIdleMs();
+
+/** Marks the identity as having just used the sandbox (restarts the 30-minute idle clock). */
+export function touchSandboxActivity(sessionId: string): void {
+  authBucket(sessionId).lastSandboxUse = Date.now();
+}
+
+/** Clears repo/branch/clone pointers (session + identity) once the sandbox has been idle too long. */
+function expireIdleRepoContext(sessionId: string): void {
+  const key = sessionAuthKey.get(sessionId) || 'anonymous';
+  const bucket = lastKnownContextByAuth.get(key);
+  const ctx = sessionContexts.get(sessionId);
+  if (Date.now() - (bucket?.lastSandboxUse ?? 0) <= REPO_IDLE_MS) return;
+  for (const target of [bucket, ctx]) {
+    if (!target) continue;
+    target.owner = undefined;
+    target.repo = undefined;
+    target.branch = undefined;
+    target.sandboxDir = undefined;
+  }
+}
 
 const AUTH_CONTEXT_PRUNE_INTERVAL_MS = 10 * 60 * 1000;
 const authContextPruneTimer = setInterval(() => {
@@ -73,6 +104,7 @@ function authBucket(sessionId: string) {
 }
 
 export function getSessionContext(sessionId: string): SessionContext {
+  expireIdleRepoContext(sessionId);
   if (!sessionContexts.has(sessionId)) {
     const enableAll = process.env.ENABLE_ALL_TOOLS === 'true';
 
@@ -111,7 +143,7 @@ export function getSessionContext(sessionId: string): SessionContext {
 
     const known = authBucket(sessionId);
     sessionContexts.set(sessionId, {
-      branch: known.branch || 'main',
+      branch: known.branch,
       owner: known.owner,
       repo: known.repo,
       sandboxDir: known.sandboxDir,
@@ -130,6 +162,10 @@ export function updateSessionContext(sessionId: string, patch: Partial<SessionCo
   if (patch.env !== undefined) patch.env = validateUserEnv(patch.env);
   Object.assign(current, patch);
   const known = authBucket(sessionId);
+  // Choosing a repo/branch or cloning counts as sandbox use; clearing a field does not.
+  if (patch.owner !== undefined || patch.repo !== undefined || patch.branch !== undefined || patch.sandboxDir !== undefined) {
+    known.lastSandboxUse = Date.now();
+  }
   if ('owner' in patch) known.owner = patch.owner;
   if ('repo' in patch) known.repo = patch.repo;
   if ('branch' in patch) known.branch = patch.branch;
@@ -366,13 +402,17 @@ export const TOOL_CATEGORY: Record<string, ToolCategory> = {
   sandbox_store: 'files'
 };
 
-export function makeRegistrar(server: any, registry: Record<string, any>) {
+export function makeRegistrar(server: any, registry: Record<string, any>, sessionId?: string) {
   const defaultIcons = server?.server?._serverInfo?.icons || server?.serverInfo?.icons;
   return (name: string, config: any, handler: any) => {
     if (defaultIcons && defaultIcons.length && !config.icons) {
       config.icons = defaultIcons;
     }
-    registry[name] = server.registerTool(name, config, handler);
+    // Any call to a sandbox-category tool restarts the idle clock for the active repo/branch.
+    const wrapped = sessionId && TOOL_CATEGORY[name] === 'sandbox'
+      ? (...args: any[]) => { touchSandboxActivity(sessionId); return handler(...args); }
+      : handler;
+    registry[name] = server.registerTool(name, config, wrapped);
     return registry[name];
   };
 }
